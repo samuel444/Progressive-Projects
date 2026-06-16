@@ -1,6 +1,6 @@
 import numpy as np
 
-# Create arrays
+# Create arrays 
 arr = np.array([10, 20, 30, 40, 50])
 
 # Indexing and Slicing
