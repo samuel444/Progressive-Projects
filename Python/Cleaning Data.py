@@ -58,36 +58,3 @@ df["Gender"] = (
 print("\nGender Values After Cleaning:")
 print(df["Gender"].unique())
 
-# OUTLIERS
-print("\n--- Summary Statistics ---")
-print(df.describe())
-
-# IQR Method
-Q1 = df["Age"].quantile(0.25)
-Q3 = df["Age"].quantile(0.75)
-
-IQR = Q3 - Q1
-
-lower_bound = Q1 - 1.5 * IQR
-upper_bound = Q3 + 1.5 * IQR
-
-outliers = df[
-    (df["Age"] < lower_bound) |
-    (df["Age"] > upper_bound)
-]
-
-print("\nDetected Outliers:")
-print(outliers)
-
-# Remove outliers
-df = df[
-    (df["Age"] >= lower_bound) &
-    (df["Age"] <= upper_bound)
-]
-
-print("\nAfter Removing Outliers:")
-print(df)
-
-
-print("\nCleaned Dataset")
-print(df)
