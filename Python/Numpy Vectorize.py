@@ -8,8 +8,7 @@ def power(x):
 
 v_power = np.vectorize(power)
 
-result = v_power(a)
-print(result) 
+print(v_power(a)) 
 
 # Vectorization with excluded arguments
 def power_exclude(x, powers):
@@ -24,6 +23,5 @@ def power_otype(x):
     return (x % 2) == 0
 
 v_power_otype = np.vectorize(power_otype, otypes=[bool])
-result = v_power_otype(a)
-print(result)
+print(v_power_otype(a))
 
