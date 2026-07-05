@@ -6,7 +6,7 @@ df = pd.DataFrame({
     "Name": ["Sam", "Alice", "Bob", "Alice", "Tom"],
     "Age": [25, np.nan, "30", np.nan, 200],
     "Gender": ["Male", " female ", "MALE", " female ", "Male"],
-    "Salary": [30000, '40000', 35000, 40000, 500000]
+    "Salary": [30000, 40000, '35000', 40000, 500000]
 })
 
 print("\nORIGINAL DATA")
@@ -15,6 +15,8 @@ print(df)
 # MISSING VALUES
 print("\n--- Missing Values ---")
 print(df.isnull())
+
+print("\nCount of Missing Values in Each Column:")
 print(df.isnull().sum())
 
 # Convert Age to numeric first
@@ -58,19 +60,18 @@ print(df.dtypes)
 # OUTLIERS
 print("\n--- Outliers ---")
 
-for col in df.columns:
-    if df[col].dtype in ['int64', 'float64']:
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
-        IQR = Q3 - Q1
+for col in df.select_dtypes(include="number"):    
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
 
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
 
-        outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
+    outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
 
-        print("\nColumn Outliers: "+col)
-        print(outliers)
+    print("\nColumn Outliers: "+col)
+    print(outliers)
 
 
 # Remove the row instead
@@ -78,6 +79,7 @@ print("\nAfter Removing Outliers:")
 print(df[df["Age"] <= 120])
 
 # Outlier Removal using drop
+print("\nAfter Removing Outliers using drop:")
 print(df.drop(index=4))
 
 # Correct the value if you KNOW it's wrong
