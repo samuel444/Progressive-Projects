@@ -13,5 +13,5 @@ apple["Rolling Max"] = apple["Close"].expanding().max()
 apple = apple.dropna()
 
 
-print("\nApple Last 30 Days Data:")
-print(apple[["Close", "Rolling Week Mean", "Rolling Quarter Median", "Rolling Month Std", "Rolling Year Min", "Rolling Max"]].tail(30))
+print("\nApple Data:")
+print(apple[["Close", "Rolling Week Mean", "Rolling Quarter Median", "Rolling Month Std", "Rolling Year Min", "Rolling Max"]])
