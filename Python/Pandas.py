@@ -32,7 +32,7 @@ temperature_data = pd.DataFrame({
 
 print(temperature_data)
 
-print(temperature_data[temperature_data['day1'] > 30])  # Filter rows where day1 temperature is greater than 30
+print(temperature_data[temperature_data['day1'] > 30]) 
 
 print(temperature_data.describe())  # Summary statistics of the DataFrame
 
