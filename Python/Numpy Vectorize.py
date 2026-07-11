@@ -20,7 +20,7 @@ print(result)
 
 # Vectorization with output types
 def power_otype(x):
-    return (x % 2) == 0
+    return (x % 2)
 
 v_power_otype = np.vectorize(power_otype, otypes=[bool])
 print(v_power_otype(a))

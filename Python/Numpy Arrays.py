@@ -50,4 +50,4 @@ print(A.T)                  # Transpose
 print(A @ B)                # Matrix multiplication
 
 print(np.linalg.det(A))     # Determinant
-print(np.linalg.inv(A))     # Inverse
+print(np.linalg.inv(A))     # Inverse. 
