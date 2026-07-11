@@ -74,29 +74,6 @@ df["Strategy"] = (
 ).cumprod()
 
 
-# Display the backtest data
-print(df.head())
-
-
-# Plot the price and moving averages
-df[["Close", "MA_20", "MA_50"]].plot(
-    title="Apple Moving Average Strategy"
-)
-
-plt.xlabel("Date")
-plt.ylabel("Price")
-plt.show()
-
-
-# Compare the strategy against buy and hold
-df[["Buy_And_Hold", "Strategy"]].plot(
-    title="Strategy vs Buy and Hold"
-)
-
-plt.xlabel("Date")
-plt.ylabel("Growth of £1")
-plt.show()
-
 
 # Calculate total returns
 buy_and_hold_return = (
@@ -150,12 +127,49 @@ buy_hold_sharpe = (
     / buy_and_hold_volatility
 )
 
+
+# Running maximum
+df["Buy_And_Hold_Peak"] = (
+    df["Buy_And_Hold"]
+    .cummax()
+)
+
+df["Strategy_Peak"] = (
+    df["Strategy"]
+    .cummax()
+)
+
+
+# Drawdown
+df["Buy_And_Hold_Drawdown"] = (
+    (df["Buy_And_Hold"] - df["Buy_And_Hold_Peak"])
+    / df["Buy_And_Hold_Peak"]
+)
+
+df["Strategy_Drawdown"] = (
+    (df["Strategy"] - df["Strategy_Peak"])
+    / df["Strategy_Peak"]
+)
+
+
+# Maximum drawdown
+buy_hold_max_drawdown = (
+    df["Buy_And_Hold_Drawdown"].min()
+)
+
+strategy_max_drawdown = (
+    df["Strategy_Drawdown"].min()
+)
+
+
 # Display the results
 # Print the backtest results
 print("\nBuy and Hold:")
 print("Return:",buy_and_hold_return)
 print("Sharpe Ratio:", buy_hold_sharpe)
+print("Maximum Drawdown:", buy_hold_max_drawdown)
 
 print("\nStrategy:")
 print("Return:", strategy_return)
 print("Sharpe Ratio:", strategy_sharpe)
+print("Maximum Drawdown:", strategy_max_drawdown)
