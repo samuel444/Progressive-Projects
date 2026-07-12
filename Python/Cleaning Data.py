@@ -103,3 +103,11 @@ print(df["Gender"].unique())
 
 print("\nCleaned Dataset:")
 print(df)
+
+
+
+
+
+
+
+
