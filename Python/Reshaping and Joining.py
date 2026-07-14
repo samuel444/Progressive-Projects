@@ -84,10 +84,11 @@ print(pd.concat([df, df2], ignore_index=True))
 
 # cut()
 print("\nCUT")
-print(pd.cut(
+df["Salary_Category"] = pd.cut(
     df["Salary"],
     bins=[0, 30000, 40000, 50000],
     labels=["Low", "Medium", "High"]
-))
+)
+print(df)
 
 
