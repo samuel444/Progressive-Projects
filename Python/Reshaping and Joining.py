@@ -9,7 +9,6 @@ df = pd.DataFrame({
 })
 
 
-
 print("ORIGINAL DATAFRAME")
 print(df)
 
@@ -67,7 +66,6 @@ info = pd.DataFrame({
 
 print("\nMERGE WITH DIFFERENT COLUMN NAMES")
 print(pd.merge(df, info, left_on="Department", right_on="Area"))
-
 
 
 # concat()
