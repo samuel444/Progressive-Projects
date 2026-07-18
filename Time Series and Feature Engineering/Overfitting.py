@@ -120,3 +120,21 @@ for result in results:
     )
 
 
+x = np.linspace(1, 15, 200)
+
+bias = 10 / x
+variance = (x / 6) ** 2
+
+test_error = bias + variance
+
+plt.figure(figsize=(8,5))
+
+plt.plot(x, bias, label="Bias")
+plt.plot(x, variance, label="Variance")
+plt.plot(x, test_error, label="Generalisation Error")
+
+plt.xlabel("Model Complexity")
+plt.ylabel("Error")
+plt.legend()
+
+plt.show()
