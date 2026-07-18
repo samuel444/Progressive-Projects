@@ -51,4 +51,4 @@ customer_id,
 SUM(quantity) AS total_quantity
 FROM Orders
 GROUP BY customer_id
-ORDER BY total_quantity DESC;
+ORDER BY total_quantity ASC;
