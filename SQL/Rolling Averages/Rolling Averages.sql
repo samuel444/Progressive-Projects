@@ -37,7 +37,7 @@ SELECT
     share_price_change,
     SUM(share_price_change) OVER (
         ORDER BY day
-        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ROWS BETWEEN UNBOUNDED PRECEDING AND PRECEDING 1
     ) AS running_return
 FROM SharePrices;
 
