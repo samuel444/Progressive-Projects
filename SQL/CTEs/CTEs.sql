@@ -43,3 +43,4 @@ INNER JOIN CustomerOrderTotals AS cot
 ON c.customer_id = cot.customer_id
 WHERE cot.total_quantity > 5
 ORDER BY cot.total_quantity DESC;
+
