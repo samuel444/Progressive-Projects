@@ -22,8 +22,6 @@ df["Tomorrow Return"] = df["Return"].shift(-1)
 df = df.dropna()
 length = len(df)
 
-days = int(input("Days to predict: "))
-
 errors = []
 
 for i in range(int(length*0.25),length-10, 10):
