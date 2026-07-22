@@ -10,6 +10,8 @@ df = yf.download(
     progress=False
 )
 
+days = int(input("Days to predict: "))
+n = int(input("How many days rolling: "))
 
 # Keep only the closing price
 df = df[["Close"]]
@@ -17,24 +19,25 @@ df = df[["Close"]]
 # Calculate daily returns
 df["Return"] = df["Close"].pct_change()
 
-df["Tomorrow Return"] = df["Return"].shift(-1)
+df["Rolling Mean"] = df["Return"].rolling(window=n).mean()
+
+df["Return Forecast"] = (1+df["Return"]).rolling(window=days).apply(np.prod, raw=True).shift(-days) - 1
 
 df = df.dropna()
 length = len(df)
 
-days = int(input("Days to predict: "))
 
 errors = []
 
 for i in range(int(length*0.25),length-10, 10):
 
-    train, test = df.iloc[:int(i)], df.iloc[int(i):int(i+10)]
+    train, test = df.iloc[:int(i)-days], df.iloc[int(i):int(i+10)]
 
-    X_train = train[["Return"]].values
-    y_train = train["Tomorrow Return"].values   
+    X_train = train[["Rolling Mean"]].values
+    y_train = train["Return Forecast"].values   
 
-    X_test = test[["Return"]].values
-    y_test = test["Tomorrow Return"].values
+    X_test = test[["Rolling Mean"]].values
+    y_test = test["Return Forecast"].values
 
     from sklearn.linear_model import LinearRegression
 
@@ -46,15 +49,16 @@ for i in range(int(length*0.25),length-10, 10):
     errors.extend(test["Predicted Return"] - y_test)
 
 errors = np.array(errors)
-walk_forward_validation = np.sqrt(np.mean(errors**2))
 
-return_std = df["Tomorrow Return"].std()
+purged_cross_validation = np.sqrt(np.mean(errors**2))
+
+return_std = df["Return Forecast"].std()
 
 print("\nForecast Return Standard Deviation:")
 print(return_std)
 
-print("\nWalk-Forward Validation:")
-print(walk_forward_validation)
+print("\nPurged Cross Validation:")
+print(purged_cross_validation)
 
 print("\nNormalized RMSE:")
-print(walk_forward_validation/return_std)
+print(purged_cross_validation/return_std)
