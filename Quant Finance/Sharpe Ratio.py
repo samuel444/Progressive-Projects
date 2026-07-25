@@ -19,7 +19,7 @@ df["Return"] = df["Close"].pct_change()
 
 
 # Calculate the short-term moving average
-df["MA_20"] = (
+df["RV_20"] = (
     df["Close"]
     .rolling(window=20)
     .mean()
@@ -27,7 +27,7 @@ df["MA_20"] = (
 
 
 # Calculate the long-term moving average
-df["MA_50"] = (
+df["RV_50"] = (
     df["Close"]
     .rolling(window=50)
     .mean()
@@ -38,7 +38,7 @@ df["MA_50"] = (
 # 1 means invested in Apple
 # 0 means out of the market
 df["Signal"] = np.where(
-    df["MA_20"] < df["MA_50"],
+    df["RV_20"] < df["RV_50"],
     1,
     0
 )
@@ -101,29 +101,46 @@ years = (
 ).days / 365.25
 
 
-strategy_annual_return = (
+strategy_return = (
     df["Strategy"].iloc[-1]
-    ** (1 / years)
     - 1
 )
 
-buy_hold_annual_return = (
+buy_hold_return = (
     df["Buy_And_Hold"].iloc[-1]
-    ** (1 / years)
     - 1
 )
 
+
+# Calculate annualised volatility
+buy_and_hold_volatility = (
+    df["Return"].std()
+    * np.sqrt(252)
+)
+
+strategy_volatility = (
+    df["Strategy_Return"].std()
+    * np.sqrt(252)
+)
 
 # Sharpe Ratio
 strategy_sharpe = (
-    strategy_annual_return
+    strategy_return
     / strategy_volatility
 )
 
 buy_hold_sharpe = (
-    buy_hold_annual_return
+    buy_hold_return
     / buy_and_hold_volatility
 )
+
+print("\nBuy and Hold:")
+print("Return:",buy_and_hold_return)
+print("Sharpe Ratio:", buy_hold_sharpe)
+
+print("\nStrategy:")
+print("Return:", strategy_return)
+print("Sharpe Ratio:", strategy_sharpe)
 
 
 # Running maximum

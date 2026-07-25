@@ -20,19 +20,21 @@ df = df[["Close"]]
 df["Return"] = df["Close"].pct_change()
 
 
-# Calculate the short-term moving average
-df["MA_20"] = (
+# Calculate the short-term realised volatility
+df["RV_20"] = (
     df["Close"]
     .rolling(window=20)
-    .mean()
+    .std()
+    * np.sqrt(252)
 )
 
 
 # Calculate the long-term moving average
-df["MA_50"] = (
+df["RV_50"] = (
     df["Close"]
     .rolling(window=50)
-    .mean()
+    .std()
+    * np.sqrt(252)
 )
 
 
@@ -40,7 +42,7 @@ df["MA_50"] = (
 # 1 means invested in Apple
 # 0 means out of the market
 df["Signal"] = np.where(
-    df["MA_20"] < df["MA_50"],
+    df["RV_20"] < df["RV_50"],
     1,
     0
 )
@@ -79,8 +81,8 @@ print(df.head())
 
 
 # Plot the price and moving averages
-df[["Close", "MA_20", "MA_50"]].plot(
-    title="Apple Moving Average Strategy"
+df[["RV_20", "RV_50"]].plot(
+    title="Apple Realised Volatility Strategy"
 )
 
 plt.xlabel("Date")
@@ -107,6 +109,13 @@ strategy_return = (
     df["Strategy"].iloc[-1] - 1
 )
 
+# Print the backtest results
+print("\nBuy and Hold Total Return:")
+print(buy_and_hold_return)
+
+print("\nStrategy Total Return:")
+print(strategy_return)
+
 
 # Calculate annualised volatility
 buy_and_hold_volatility = (
@@ -119,13 +128,6 @@ strategy_volatility = (
     * np.sqrt(252)
 )
 
-
-# Print the backtest results
-print("\nBuy and Hold Total Return:")
-print(buy_and_hold_return)
-
-print("\nStrategy Total Return:")
-print(strategy_return)
 
 print("\nBuy and Hold Annualised Volatility:")
 print(buy_and_hold_volatility)

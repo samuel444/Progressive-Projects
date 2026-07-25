@@ -16,12 +16,8 @@ microsoft = yf.download("MSFT", period="3d", interval="1h")
 print("\nMicrosoft Hourly Data:")
 print(microsoft)
 
-
-google = yf.download(["GOOGL", "MSFT", "AAPL"], start="2025-01-01", end="2026-01-01")
-google = google["Close","MSFT"]
-print("\nGoogle Close Prices:")
-print(google)
-
+print("\nMicrosoft Closed Prices:")
+print(microsoft["Close"])
 
 print('\nMicrosoft Percent Change:')
 print(microsoft["Close"].pct_change())

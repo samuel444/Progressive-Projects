@@ -58,33 +58,3 @@ plt.xlabel("Date")
 plt.ylabel("Rolling Average Return")
 plt.show()
 
-
-# Rolling standard deviation of returns
-df["Return_Rolling_Std"] = (
-    df["Return"]
-    .rolling(window=30)
-    .std()
-)
-
-df["Return_Rolling_Std"].plot(title="Rolling Standard Deviation of Returns")
-
-plt.xlabel("Date")
-plt.ylabel("Rolling Volatility")
-plt.show()
-
-
-df = df.dropna()
-
-
-# Simple comparison summary
-print("Price mean:")
-print(df["Close"].mean())
-
-print("\nReturn mean:")
-print(df["Return"].mean())
-
-print("\nPrice standard deviation:")
-print(df["Close"].std())
-
-print("\nReturn standard deviation:")
-print(df["Return"].std())

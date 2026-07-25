@@ -10,20 +10,21 @@ df = yf.download(
 
 df["Return"] = df["Close"].pct_change()
 
-# Annualised realised volatility
+# Realised Volatility
 df["20 Day Realised Volatility"] = (
     df["Return"]
     .rolling(20)
     .std()
-    * (252 ** 0.5)
 )
 
-df["60 Day RV"] = df["Return"].rolling(60).std() * (252 ** 0.5)
-df["252 Day RV"] = df["Return"].rolling(252).std() * (252 ** 0.5)
+# Annualised realised volatility
+df["Annualised 20 Day Realised Volatility"] = (
+    df["20 Day Realised Volatility"] * (252 ** 0.5)
+)
 
-print(df[["Return", "20 Day Realised Volatility"]])
+print(df[["Return", "Annualised 20 Day Realised Volatility"]])
 
-plt.plot(df.index, df["20 Day Realised Volatility"])
+plt.plot(df.index, df["Annualised 20 Day Realised Volatility"])
 plt.title("20-Day Annualised Realised Volatility")
 plt.ylabel("Volatility")
 plt.grid(True)
