@@ -12,7 +12,7 @@ df = yf.download(
 
 
 # Keep only the closing price
-df = df[["Close"]]
+df = df[["Close", "Volume"]]
 
 # Calculate daily returns
 df["Return"] = df["Close"].pct_change()
@@ -64,9 +64,67 @@ baseline_rmse = np.sqrt(baseline_mse)
 print(f"Model RMSE: {rmse}")
 print(f"Zero Baseline RMSE: {baseline_rmse}")
 
-improvement = (
-    (baseline_rmse - rmse)
-    / baseline_rmse
-) * 100
+# Yesterday's return
+df["Yesterday Return"] = df["Return"].shift(1)
 
-print(f"Improvement Over Baseline: {improvement:.2f}%")
+# 20-day realised volatility
+df["Realised Volatility"] = (
+    df["Return"]
+    .rolling(window=20)
+    .std()
+    * np.sqrt(252)
+)
+
+df = df.dropna()
+length = len(df)
+
+train, test = df.iloc[:int(length * 0.8)], df.iloc[int(length * 0.8):]
+
+
+# Four features instead of one
+features = [
+    "Return",
+    "Yesterday Return",
+    "Realised Volatility",
+    "Volume"
+]
+
+X_train = train[features].values
+y_train = train["Tomorrow Return"].values
+
+X_test = test[features].values
+y_test = test["Tomorrow Return"].values
+
+
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+test = test.copy()
+test["Predicted Return"] = model.predict(X_test)
+
+
+# Plot actual vs predicted returns through time
+plt.plot(test.index, y_test, label="Actual Returns")
+plt.plot(test.index, test["Predicted Return"], label="Predicted Returns")
+plt.xlabel("Date")
+plt.ylabel("Tomorrow's Return")
+plt.legend()
+plt.show()
+
+
+mean_squared_error = np.mean(
+    (test["Predicted Return"] - y_test) ** 2
+)
+
+rmse = np.sqrt(mean_squared_error)
+
+baseline_predictions = np.zeros(len(y_test))
+
+baseline_mse = np.mean(
+    (baseline_predictions - y_test) ** 2
+)
+
+baseline_rmse = np.sqrt(baseline_mse)
+
+print(f"\nModel RMSE: {rmse}")
+print(f"Zero Baseline RMSE: {baseline_rmse}")

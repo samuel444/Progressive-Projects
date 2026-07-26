@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from matplotlib import pyplot as plt
 
 # Download Apple stock data
 df = yf.download(
@@ -21,18 +22,18 @@ df["Return"] = df["Close"].pct_change()
 
 
 # Calculate the short-term moving average
-df["MA_20"] = (
+df["RV_20"] = (
     df["Close"]
     .rolling(window=20)
-    .mean()
+    .std()
 )
 
 
 # Calculate the long-term moving average
-df["MA_50"] = (
+df["RV_50"] = (
     df["Close"]
     .rolling(window=50)
-    .mean()
+    .std()
 )
 
 
@@ -40,7 +41,7 @@ df["MA_50"] = (
 # 1 means the strategy wants to own Apple
 # 0 means the strategy wants to stay out of the market
 df["Signal"] = np.where(
-    df["MA_20"] > df["MA_50"],
+    df["RV_20"] < df["RV_50"],
     1,
     0
 )
@@ -139,14 +140,12 @@ strategy_volatility = (
 
 
 # Calculate annualised mean returns
-buy_and_hold_annual_return = (
+buy_and_hold_mean = (
     df["Return"].mean()
-    * 252
 )
 
-strategy_annual_return = (
+strategy_mean = (
     df["Strategy_Return"].mean()
-    * 252
 )
 
 
@@ -154,11 +153,11 @@ strategy_annual_return = (
 
 # Calculate Sharpe ratios
 buy_and_hold_sharpe = (
-    buy_and_hold_annual_return
+    buy_and_hold_mean
 ) / buy_and_hold_volatility
 
 strategy_sharpe = (
-    strategy_annual_return
+    strategy_mean
 ) / strategy_volatility
 
 
@@ -204,31 +203,18 @@ strategy_max_drawdown = (
 )
 
 
-# Find the dates of the largest drawdowns
-buy_and_hold_worst_date = (
-    df["Buy_And_Hold_Drawdown"]
-    .idxmin()
-)
-
-strategy_worst_date = (
-    df["Strategy_Drawdown"]
-    .idxmin()
-)
-
-
-
 # Create a strategy comparison table
 comparison = pd.DataFrame({
     "Buy and Hold": [
         buy_and_hold_return,
-        buy_and_hold_annual_return,
+        buy_and_hold_mean,
         buy_and_hold_volatility,
         buy_and_hold_sharpe,
         buy_and_hold_max_drawdown
     ],
     "Strategy": [
         strategy_return,
-        strategy_annual_return,
+        strategy_mean,
         strategy_volatility,
         strategy_sharpe,
         strategy_max_drawdown
@@ -236,7 +222,7 @@ comparison = pd.DataFrame({
 },
 index=[
     "Total Return",
-    "Annualised Return",
+    "Mean Returns",
     "Annualised Volatility",
     "Sharpe Ratio",
     "Maximum Drawdown"
@@ -247,6 +233,21 @@ index=[
 print("\nStrategy Comparison:")
 print(comparison)
 
+df[["Buy_And_Hold", "Strategy"]].plot(
+    title="Strategy vs Buy and Hold"
+)
+
+plt.xlabel("Date")
+plt.ylabel("Growth of £1")
+plt.show()
+
+df[["Buy_And_Hold_Drawdown", "Strategy_Drawdown"]].plot(
+    title="Strategy vs Buy and Hold Drawdown"
+)
+
+plt.xlabel("Date")
+plt.ylabel("Drawdown")
+plt.show()
 
 # Display the effect of trading fees
 print("\nStrategy Return Before Fees:")
@@ -257,28 +258,4 @@ print(strategy_return)
 
 print("\nNumber of Position Changes:")
 print(df["Trade"].sum())
-
-
-# Display the worst drawdown dates
-print("\nBuy and Hold Worst Drawdown Date:")
-print(buy_and_hold_worst_date)
-
-print("\nStrategy Worst Drawdown Date:")
-print(strategy_worst_date)
-
-
-# --------------------------------------------------
-# Backtest mistake 1: Lookahead bias
-# --------------------------------------------------
-
-
-
-# --------------------------------------------------
-# Backtest mistake 2: Ignoring trading fees
-# --------------------------------------------------
-
-
-# --------------------------------------------------
-# Backtest mistake 3: Overfitting
-# --------------------------------------------------
 
