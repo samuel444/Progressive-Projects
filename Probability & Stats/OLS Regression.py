@@ -21,37 +21,27 @@ df["Tomorrow Return"] = df["Return"].shift(-1)
 
 df = df.dropna()
 
-x = df[["Return"]].values
-y = df["Tomorrow Return"].values   
+# Get x and y values
+y = df["Tomorrow Return"].values
 
-x = x.flatten()
+# Add a column of 1s for the intercept
+X = np.column_stack((np.ones(len(df[["Return"]].values)), df[["Return"]].values))
 
-x_mean = np.mean(x)
-y_mean = np.mean(y)
+# OLS: beta_hat = (X^T X)^(-1) X^T y
+beta_hat = np.linalg.inv(X.T @ X) @ X.T @ y
 
-x_deviation = x - x_mean
-y_deviation = y - y_mean
-
-covariance_term = x_deviation * y_deviation
-variance_term = x_deviation ** 2
-
-b1_numerator = np.sum(covariance_term)
-b1_denominator = np.sum(variance_term)
-
-b1 = b1_numerator / b1_denominator
-
-b0 = y_mean - (b1 * x_mean)
+b0 = beta_hat[0]
+b1 = beta_hat[1]
 
 print("Manual OLS:")
-print("Intercept:",b0)
-print("Slope:",b1)
-
+print("Intercept:", b0)
+print("Slope:", b1)
 print("")
 
 from sklearn.linear_model import LinearRegression
 
 model = LinearRegression()
-model.fit(x.reshape(-1, 1), y)
+model.fit(df[["Return"]].values, y)
 
 print("Scikit results:")
 print("Intercept:",model.intercept_)

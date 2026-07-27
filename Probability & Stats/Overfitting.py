@@ -22,10 +22,8 @@ x_train, x_test, y_train, y_test = train_test_split(
 )
 
 
-degrees = [1,2,3,5,7,10,15]
+degrees = [1,2,3,4,7,10,12]
 results = []
-
-x_curve = np.linspace(x.min(), x.max(), 500)
 
 
 for degree in degrees:
@@ -44,11 +42,6 @@ for degree in degrees:
         increasing=True
     )
 
-    X_curve = np.vander(
-        x_curve,
-        N=degree + 1,
-        increasing=True
-    )
 
     # The constant column is already in the Vandermonde matrix,
     # so sklearn should not add another intercept
@@ -57,7 +50,6 @@ for degree in degrees:
 
     train_predictions = model.predict(X_train)
     test_predictions = model.predict(X_test)
-    curve_predictions = model.predict(X_curve)
 
     train_rmse = np.sqrt(
         mean_squared_error(y_train, train_predictions)
@@ -73,32 +65,39 @@ for degree in degrees:
         "test_rmse": test_rmse
     })
 
-    plt.figure(figsize=(9, 5))
-
     plt.scatter(
         x_train,
         y_train,
-        label="Training data"
+        marker="o",
+        label="Training Actual data"
     )
 
     plt.scatter(
         x_test,
         y_test,
-        marker="x",
+        marker="o",
         s=70,
-        label="Test data"
+        label="Test Actual data"
     )
 
-    plt.plot(
-        x_curve,
-        curve_predictions,
-        label=f"Degree {degree}"
-    )
+    plt.scatter(
+            x_test,
+            test_predictions,
+            marker="x",
+            s=70,
+            label="Test Predicted data"
+        )
+
+    plt.scatter(
+                x_train,
+                train_predictions,
+                marker="x",
+                s=70,
+                label="Train Predicted data"
+            )
 
     plt.title(
         f"Polynomial Degree {degree}\n"
-        f"Train RMSE: {train_rmse:.3f} | "
-        f"Test RMSE: {test_rmse:.3f}"
     )
 
     plt.xlabel("x")
@@ -120,21 +119,3 @@ for result in results:
     )
 
 
-x = np.linspace(1, 15, 200)
-
-bias = 10 / x
-variance = (x / 6) ** 2
-
-test_error = bias + variance
-
-plt.figure(figsize=(8,5))
-
-plt.plot(x, bias, label="Bias")
-plt.plot(x, variance, label="Variance")
-plt.plot(x, test_error, label="Generalisation Error")
-
-plt.xlabel("Model Complexity")
-plt.ylabel("Error")
-plt.legend()
-
-plt.show()

@@ -43,10 +43,6 @@ print("Slope:", model.coef_[0])
 
 # LINEARITY: OBSERVED DATA AND REGRESSION LINE
 # Sort X so that the fitted line is drawn from left to right
-sort_order = np.argsort(x)
-
-x_sorted = x[sort_order]
-predictions_sorted = predictions[sort_order]
 
 plt.figure(figsize=(9, 5))
 
@@ -59,8 +55,8 @@ plt.scatter(
 )
 
 plt.plot(
-    x_sorted,
-    predictions_sorted,
+    x,
+    predictions,
     linewidth=2,
     label="OLS regression line"
 )
@@ -118,10 +114,7 @@ plt.axvline(0, linestyle="--", linewidth=1)
 
 plt.xlabel("Residual at time t")
 plt.ylabel("Residual at time t + 1")
-plt.title(
-    f"Residual Lag Plot: Correlation = "
-    f"{residual_autocorrelation:.3f}"
-)
+plt.title("Residual Lag Plot")
 
 plt.tight_layout()
 plt.show()
