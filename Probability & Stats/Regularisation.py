@@ -7,10 +7,7 @@ from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from sklearn.metrics import mean_squared_error
 
 
-# ------------------------------------------
-# 1. Download Apple stock data
-# ------------------------------------------
-
+# Download Apple stock data
 df = yf.download(
     "AAPL",
     start="2020-01-01",
@@ -25,10 +22,7 @@ df = df[["Close"]]
 df["Return"] = df["Close"].pct_change()
 
 
-# ------------------------------------------
-# 2. Create features
-# ------------------------------------------
-
+# Create features
 # Lagged returns
 for lag in range(1, 11):
     df[f"Lag_{lag}"] = df["Return"].shift(lag)
@@ -49,10 +43,7 @@ df["Tomorrow_Return"] = df["Return"].shift(-1)
 df = df.dropna()
 
 
-# ------------------------------------------
-# 3. Define X and y
-# ------------------------------------------
-
+# Define X and y
 features = (
     [f"Lag_{lag}" for lag in range(1, 11)]
     + [
@@ -71,10 +62,7 @@ y = df["Tomorrow_Return"]
 print("Number of features:", len(features))
 
 
-# ------------------------------------------
-# 4. Chronological train / validation / test
-# ------------------------------------------
-
+# Chronological train / validation / test
 n = len(df)
 
 train_end = int(n * 0.60)
@@ -89,10 +77,7 @@ y_val = y.iloc[train_end:val_end]
 y_test = y.iloc[val_end:]
 
 
-# ------------------------------------------
-# 5. Standard scaling
-# ------------------------------------------
-
+# Standard scaling
 scaler = StandardScaler()
 
 # Learn mean/std from TRAINING data only
@@ -103,10 +88,7 @@ X_val_scaled = scaler.transform(X_val)
 X_test_scaled = scaler.transform(X_test)
 
 
-# ------------------------------------------
-# 6. OLS baseline
-# ------------------------------------------
-
+# OLS baseline
 ols = LinearRegression()
 
 ols.fit(
@@ -126,10 +108,7 @@ ols_val_rmse = np.sqrt(
 )
 
 
-# ------------------------------------------
-# 7. Ridge
-# ------------------------------------------
-
+# Ridge
 ridge_alphas = [
     0.001,
     0.01,
@@ -182,10 +161,7 @@ best_ridge = min(
 )
 
 
-# ------------------------------------------
-# 8. Lasso
-# ------------------------------------------
-
+# Lasso
 lasso_alphas = [
     0.000001,
     0.00001,
@@ -238,10 +214,7 @@ best_lasso = min(
 )
 
 
-# ------------------------------------------
-# 9. Display every alpha tested
-# ------------------------------------------
-
+# Display every alpha tested
 ridge_table = pd.DataFrame([
     {
         "Alpha": result["Alpha"],
@@ -268,10 +241,8 @@ print("\nLASSO RESULTS")
 print(lasso_table)
 
 
-# ------------------------------------------
-# 10. Final comparison table
-# ------------------------------------------
 
+# Final comparison table
 comparison = pd.DataFrame({
     "Model": [
         "OLS",
