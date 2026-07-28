@@ -35,10 +35,7 @@ y_train = y[:split]
 y_test = y[split:]
 
 
-# -----------------------
 # Gradient Descent
-# -----------------------
-
 beta_0 = 0.0
 beta_1 = 0.0
 

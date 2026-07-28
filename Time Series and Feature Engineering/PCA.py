@@ -7,11 +7,7 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-
-# ---------------------------------------
 # Download data
-# ---------------------------------------
-
 df = yf.download(
     "AAPL",
     start="2021-01-01",
@@ -66,11 +62,7 @@ predictor_columns = [
     "Relative Volume 20"
 ]
 
-
-# ---------------------------------------
 # Target
-# ---------------------------------------
-
 df["Future Volatility"] = (
     df["Return"]
     .rolling(days)
@@ -85,10 +77,7 @@ X = df[predictor_columns]
 y = df["Future Volatility"]
 
 
-# ---------------------------------------
 # Chronological split with purge
-# ---------------------------------------
-
 split = int(len(df) * 0.8)
 
 X_train = X.iloc[:split - days]
@@ -98,20 +87,15 @@ y_train = y.iloc[:split - days]
 y_test = y.iloc[split:]
 
 
-# ---------------------------------------
 # Standardise
-# ---------------------------------------
-
 scaler = StandardScaler()
 
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 
-# ---------------------------------------
-# PCA with all components first
-# ---------------------------------------
 
+# PCA with all components first
 pca = PCA()
 
 X_train_pca = pca.fit_transform(
@@ -123,10 +107,7 @@ X_test_pca = pca.transform(
 )
 
 
-# ---------------------------------------
 # Explained variance
-# ---------------------------------------
-
 explained_variance = (
     pca.explained_variance_ratio_
 )
@@ -150,10 +131,7 @@ print("\nPCA EXPLAINED VARIANCE")
 print(variance_table)
 
 
-# ---------------------------------------
 # Number of PCs needed for 95%
-# ---------------------------------------
-
 components_95 = (
     np.argmax(cumulative_variance >= 0.95) + 1
 )
@@ -164,10 +142,7 @@ print(
 )
 
 
-# ---------------------------------------
 # PCA again using selected number
-# ---------------------------------------
-
 pca_reduced = PCA(
     n_components=components_95
 )
@@ -180,11 +155,7 @@ X_test_reduced = pca_reduced.transform(
     X_test_scaled
 )
 
-
-# ---------------------------------------
 # Linear regression on PCA features
-# ---------------------------------------
-
 pca_model = LinearRegression()
 
 pca_model.fit(
@@ -214,11 +185,7 @@ pca_r2 = r2_score(
     pca_predictions
 )
 
-
-# ---------------------------------------
 # Original linear regression
-# ---------------------------------------
-
 linear_model = LinearRegression()
 
 linear_model.fit(
@@ -249,10 +216,7 @@ linear_r2 = r2_score(
 )
 
 
-# ---------------------------------------
 # Compare
-# ---------------------------------------
-
 comparison = pd.DataFrame({
     "Model": [
         "Original Linear Regression",
@@ -274,7 +238,7 @@ comparison = pd.DataFrame({
         pca_mae
     ],
 
-    "R²": [
+    "R squared": [
         linear_r2,
         pca_r2
     ]
