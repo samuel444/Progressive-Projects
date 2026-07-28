@@ -11,7 +11,6 @@ df = yf.download(
 )
 
 days = int(input("Days to predict: "))
-n = int(input("How many days rolling: "))
 
 # Keep only the closing price
 df = df[["Close"]]
@@ -19,9 +18,9 @@ df = df[["Close"]]
 # Calculate daily returns
 df["Return"] = df["Close"].pct_change()
 
-df["Rolling Mean"] = df["Return"].rolling(window=n).mean()
-
 df["Return Forecast"] = (1+df["Return"]).rolling(window=days).apply(np.prod, raw=True).shift(-days) - 1
+
+df["Rolling Mean"] = df["Return"].rolling(window=30).mean()
 
 df = df.dropna()
 length = len(df)

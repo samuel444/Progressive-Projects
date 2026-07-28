@@ -59,9 +59,6 @@ features = (
 X = df[features]
 y = df["Tomorrow_Return"]
 
-print("Number of features:", len(features))
-
-
 # Chronological train / validation / test
 n = len(df)
 
@@ -175,8 +172,7 @@ lasso_results = []
 for alpha in lasso_alphas:
 
     model = Lasso(
-        alpha=alpha,
-        max_iter=100000
+        alpha=alpha
     )
 
     model.fit(
