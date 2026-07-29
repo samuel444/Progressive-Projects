@@ -19,3 +19,6 @@ plt.xlabel("Time")
 plt.ylabel("W(t)")
 plt.title("Brownian Motion")
 plt.show()
+
+
+
