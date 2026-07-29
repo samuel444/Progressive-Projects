@@ -15,59 +15,30 @@ from sklearn.metrics import (
 import yfinance as yf
 import numpy as np
 
-
-# ============================================================
-# LOGGING CONFIGURATION
-# ============================================================
-
+# LOGGING
 logging.basicConfig(
-    level=logging.DEBUG,
-    format=(
-        "%(asctime)s - "
-        "%(levelname)s - "
-        "%(message)s"
-    ),
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(
-            "model_validation.log",
-            mode="w"
-        ),
+        logging.FileHandler("model_validation.log", mode="w"),
         logging.StreamHandler()
     ]
 )
 
 logger = logging.getLogger(__name__)
 
-
-# ============================================================
 # WALK-FORWARD VALIDATION
-# ============================================================
-
 def walk_forward_validation(df):
 
     logger.info("Starting walk-forward validation")
 
     days = int(
-        input(
-            "How many days ahead to predict? (>=1): "
-        )
+        input("How many days ahead to predict? (>=1): ")
     )
 
     if days < 1:
-
-        logger.error(
-            "Invalid forecast horizon entered: %d",
-            days
-        )
-
-        raise ValueError(
-            "Days must be at least 1."
-        )
-
-    logger.info(
-        "Forecast horizon selected: %d days",
-        days
-    )
+        logger.error("Forecast horizon must be at least 1 day")
+        raise ValueError("Days must be at least 1.")
 
     df = df.copy()
 
@@ -80,23 +51,15 @@ def walk_forward_validation(df):
 
     df = df.dropna()
 
-    rows_removed = (
-        rows_before - len(df)
-    )
+    rows_removed = rows_before - len(df)
 
     if rows_removed > 0:
-
         logger.warning(
             "%d rows removed because of missing values",
             rows_removed
         )
 
     length = len(df)
-
-    logger.info(
-        "Validation dataset contains %d usable rows",
-        length
-    )
 
     actual_values = []
     predicted_values = []
@@ -108,38 +71,21 @@ def walk_forward_validation(df):
     ):
 
         train = df.iloc[:i]
+        test = df.iloc[i:i + 10]
 
-        test = df.iloc[
-            i:i + 10
-        ]
-
+        # Hidden during normal INFO logging.
+        # Useful if validation behaves strangely.
         logger.debug(
-            "Starting fold: "
-            "training rows=%d, "
-            "test rows=%d",
+            "Fold: %d training rows, %d test rows",
             len(train),
             len(test)
         )
 
-        X_train = (
-            train[["Predictor"]]
-            .values
-        )
+        X_train = train[["Predictor"]].values
+        y_train = train["Results"].values
 
-        y_train = (
-            train["Results"]
-            .values
-        )
-
-        X_test = (
-            test[["Predictor"]]
-            .values
-        )
-
-        y_test = (
-            test["Results"]
-            .values
-        )
+        X_test = test[["Predictor"]].values
+        y_test = test["Results"].values
 
         model = LinearRegression()
 
@@ -148,84 +94,39 @@ def walk_forward_validation(df):
             y_train
         )
 
-        logger.debug(
-            "Model fitted: "
-            "coefficient=%s, intercept=%s",
-            model.coef_,
-            model.intercept_
-        )
-
         predictions = model.predict(
             X_test
         )
 
-        logger.debug(
-            "Generated %d predictions",
-            len(predictions)
-        )
-
-        actual_values.extend(
-            y_test
-        )
-
-        predicted_values.extend(
-            predictions
-        )
+        actual_values.extend(y_test)
+        predicted_values.extend(predictions)
 
     logger.info(
-        "Walk-forward validation completed "
-        "with %d predictions",
+        "Walk-forward validation completed with %d predictions",
         len(predicted_values)
     )
 
-    return (
-        actual_values,
-        predicted_values,
-        df
-    )
+    return actual_values, predicted_values, df
 
-
-# ============================================================
 # PURGED CROSS-VALIDATION
-# ============================================================
-
 def purged_cross_validation(df):
 
-    logger.info(
-        "Starting purged cross-validation"
-    )
+    logger.info("Starting purged cross-validation")
 
     days = int(
-        input(
-            "Number of days to predict: "
-        )
+        input("Number of days to predict: ")
     )
 
     if days < 1:
-
-        logger.error(
-            "Invalid prediction window: %d",
-            days
-        )
-
-        raise ValueError(
-            "Days must be at least 1."
-        )
-
-    logger.info(
-        "Prediction window selected: %d days",
-        days
-    )
+        logger.error("Prediction window must be at least 1 day")
+        raise ValueError("Days must be at least 1.")
 
     df = df.copy()
 
     df["Results"] = (
         (1 + df["Return"])
         .rolling(window=days)
-        .apply(
-            np.prod,
-            raw=True
-        )
+        .apply(np.prod, raw=True)
         .shift(-days)
         - 1
     )
@@ -234,25 +135,15 @@ def purged_cross_validation(df):
 
     df = df.dropna()
 
-    rows_removed = (
-        rows_before - len(df)
-    )
+    rows_removed = rows_before - len(df)
 
     if rows_removed > 0:
-
         logger.warning(
-            "%d rows removed after "
-            "constructing rolling target",
+            "%d rows removed because of missing values",
             rows_removed
         )
 
     length = len(df)
-
-    logger.info(
-        "Purged validation dataset "
-        "contains %d usable rows",
-        length
-    )
 
     actual_values = []
     predicted_values = []
@@ -263,54 +154,30 @@ def purged_cross_validation(df):
         10
     ):
 
-        train = df.iloc[
-            :i - days
-        ]
-
-        test = df.iloc[
-            i:i + 10
-        ]
+        train = df.iloc[:i - days]
+        test = df.iloc[i:i + 10]
 
         logger.debug(
-            "Starting purged fold: "
-            "training rows=%d, "
-            "purged rows=%d, "
-            "test rows=%d",
+            "Purged fold: %d training rows, %d purged rows, %d test rows",
             len(train),
             days,
             len(test)
         )
 
         if len(train) == 0:
-
             logger.error(
-                "Training set is empty "
-                "after purging"
+                "Training set empty after purging"
             )
 
             raise ValueError(
                 "Training set is empty."
             )
 
-        X_train = (
-            train[["Predictor"]]
-            .values
-        )
+        X_train = train[["Predictor"]].values
+        y_train = train["Results"].values
 
-        y_train = (
-            train["Results"]
-            .values
-        )
-
-        X_test = (
-            test[["Predictor"]]
-            .values
-        )
-
-        y_test = (
-            test["Results"]
-            .values
-        )
+        X_test = test[["Predictor"]].values
+        y_test = test["Results"].values
 
         model = LinearRegression()
 
@@ -319,51 +186,26 @@ def purged_cross_validation(df):
             y_train
         )
 
-        logger.debug(
-            "Model fitted: "
-            "coefficient=%s, intercept=%s",
-            model.coef_,
-            model.intercept_
-        )
-
         predictions = model.predict(
             X_test
         )
 
-        actual_values.extend(
-            y_test
-        )
-
-        predicted_values.extend(
-            predictions
-        )
+        actual_values.extend(y_test)
+        predicted_values.extend(predictions)
 
     logger.info(
-        "Purged cross-validation completed "
-        "with %d predictions",
+        "Purged cross-validation completed with %d predictions",
         len(predicted_values)
     )
 
-    return (
-        actual_values,
-        predicted_values,
-        df
-    )
+    return actual_values, predicted_values, df
 
-
-# ============================================================
 # MAIN PROGRAM
-# ============================================================
-
 def main():
 
-    logger.info(
-        "Program started"
-    )
-
-    logger.info(
-        "Downloading AAPL market data"
-    )
+    logger.info("Program started")
+    # DOWNLOAD DATA
+    logger.info("Downloading AAPL data")
 
     df = yf.download(
         "AAPL",
@@ -373,14 +215,11 @@ def main():
         progress=False
     )
 
-    # CRITICAL:
-    # Nothing else in the program can work
-    # if no market data exists.
+    # CRITICAL = program cannot continue at all
     if df.empty:
 
         logger.critical(
-            "No AAPL data was downloaded. "
-            "Program cannot continue."
+            "No market data downloaded. Program cannot continue."
         )
 
         raise RuntimeError(
@@ -392,81 +231,35 @@ def main():
         len(df)
     )
 
-    logger.debug(
-        "Downloaded columns: %s",
-        list(df.columns)
-    )
-
     df = df[
         ["Close", "Volume"]
     ]
-
-    logger.info(
-        "Calculating daily returns"
-    )
 
     df["Return"] = (
         df["Close"]
         .pct_change()
     )
 
-    missing_returns = (
-        df["Return"]
-        .isna()
-        .sum()
-    )
-
-    if missing_returns > 0:
-
-        logger.warning(
-            "Return column contains %d "
-            "missing values",
-            missing_returns
-        )
-
+    # CHOOSE PREDICTOR
     print("\nChoose a predictor:")
     print("1. Previous day's return")
     print("2. Rolling mean return")
-    print(
-        "3. Rolling return "
-        "standard deviation"
-    )
+    print("3. Rolling return standard deviation")
     print("4. Momentum")
-    print(
-        "5. Price-to-moving-average ratio"
-    )
+    print("5. Price-to-moving-average ratio")
     print("6. Relative volume")
-    print(
-        "7. Distance from rolling high"
-    )
-    print(
-        "8. Rolling return "
-        "cumulative product"
-    )
+    print("7. Distance from rolling high")
+    print("8. Rolling return cumulative product")
 
     choice = int(
-        input(
-            "\nEnter a number from 1 to 8: "
-        )
+        input("\nEnter a number from 1 to 8: ")
     )
 
-    logger.info(
-        "Predictor choice entered: %d",
-        choice
-    )
 
     if choice == 1:
 
         days = int(
-            input(
-                "Days before today (>=1): "
-            )
-        )
-
-        logger.info(
-            "Using lagged return predictor "
-            "with lag=%d",
-            days
+            input("Days before today (>=1): ")
         )
 
         df["Predictor"] = (
@@ -474,19 +267,13 @@ def main():
             .shift(days)
         )
 
+        predictor_name = "Previous Return"
+
 
     elif choice == 2:
 
         days = int(
-            input(
-                "Number of rolling days: "
-            )
-        )
-
-        logger.info(
-            "Using rolling mean predictor "
-            "with window=%d",
-            days
+            input("Number of rolling days: ")
         )
 
         df["Predictor"] = (
@@ -495,19 +282,13 @@ def main():
             .mean()
         )
 
+        predictor_name = "Rolling Mean"
+
 
     elif choice == 3:
 
         days = int(
-            input(
-                "Number of rolling days: "
-            )
-        )
-
-        logger.info(
-            "Using rolling volatility "
-            "predictor with window=%d",
-            days
+            input("Number of rolling days: ")
         )
 
         df["Predictor"] = (
@@ -516,19 +297,13 @@ def main():
             .std()
         )
 
+        predictor_name = "Rolling Volatility"
+
 
     elif choice == 4:
 
         days = int(
-            input(
-                "Days gap (>=1): "
-            )
-        )
-
-        logger.info(
-            "Using momentum predictor "
-            "with gap=%d",
-            days
+            input("Days gap (>=1): ")
         )
 
         df["Predictor"] = (
@@ -537,19 +312,13 @@ def main():
             - 1
         )
 
+        predictor_name = "Momentum"
+
 
     elif choice == 5:
 
         days = int(
-            input(
-                "Number of rolling days: "
-            )
-        )
-
-        logger.info(
-            "Using price-to-moving-average "
-            "predictor with window=%d",
-            days
+            input("Number of rolling days: ")
         )
 
         moving_average = (
@@ -564,19 +333,13 @@ def main():
             - 1
         )
 
+        predictor_name = "Price-to-Moving-Average"
+
 
     elif choice == 6:
 
         days = int(
-            input(
-                "Number of rolling days: "
-            )
-        )
-
-        logger.info(
-            "Using relative volume predictor "
-            "with window=%d",
-            days
+            input("Number of rolling days: ")
         )
 
         average_volume = (
@@ -591,19 +354,13 @@ def main():
             - 1
         )
 
+        predictor_name = "Relative Volume"
+
 
     elif choice == 7:
 
         days = int(
-            input(
-                "Number of rolling days: "
-            )
-        )
-
-        logger.info(
-            "Using distance-from-high "
-            "predictor with window=%d",
-            days
+            input("Number of rolling days: ")
         )
 
         rolling_high = (
@@ -618,60 +375,44 @@ def main():
             - 1
         )
 
+        predictor_name = "Distance from Rolling High"
+
 
     elif choice == 8:
 
         days = int(
-            input(
-                "Number of rolling days: "
-            )
-        )
-
-        logger.info(
-            "Using cumulative return "
-            "predictor with window=%d",
-            days
+            input("Number of rolling days: ")
         )
 
         df["Predictor"] = (
             (1 + df["Return"])
             .rolling(window=days)
-            .apply(
-                np.prod,
-                raw=True
-            )
+            .apply(np.prod, raw=True)
             - 1
         )
+
+        predictor_name = "Rolling Cumulative Return"
 
 
     else:
 
         logger.error(
-            "Invalid predictor choice: %d",
+            "Invalid predictor choice entered: %d",
             choice
         )
 
         raise ValueError(
-            "Choice must be a number "
-            "from 1 to 8."
+            "Choice must be a number from 1 to 8."
         )
 
 
-    missing_predictors = (
-        df["Predictor"]
-        .isna()
-        .sum()
+    logger.info(
+        "Predictor selected: %s, window/lag=%d",
+        predictor_name,
+        days
     )
 
-    if missing_predictors > 0:
-
-        logger.warning(
-            "Predictor contains %d "
-            "missing values before validation",
-            missing_predictors
-        )
-
-
+    # VALIDATION METHOD
     method = input(
         "\nAre you predicting:"
         "\n1) A singular future day"
@@ -683,39 +424,29 @@ def main():
     if method == "1":
 
         logger.info(
-            "Validation method selected: "
-            "walk-forward validation"
+            "Validation method selected: Walk-forward"
         )
 
-        (
-            actual_values,
-            predicted_values,
-            df
-        ) = walk_forward_validation(
-            df
+        actual_values, predicted_values, df = (
+            walk_forward_validation(df)
         )
 
 
     elif method == "2":
 
         logger.info(
-            "Validation method selected: "
-            "purged cross-validation"
+            "Validation method selected: Purged cross-validation"
         )
 
-        (
-            actual_values,
-            predicted_values,
-            df
-        ) = purged_cross_validation(
-            df
+        actual_values, predicted_values, df = (
+            purged_cross_validation(df)
         )
 
 
     else:
 
         logger.error(
-            "Invalid validation choice: %s",
+            "Invalid validation choice entered: %s",
             method
         )
 
@@ -736,7 +467,7 @@ def main():
     if len(actual_values) == 0:
 
         logger.critical(
-            "Validation produced no observations. "
+            "Validation produced no predictions. "
             "Metrics cannot be calculated."
         )
 
@@ -744,18 +475,7 @@ def main():
             "No validation results."
         )
 
-
-    logger.info(
-        "Calculating evaluation metrics "
-        "for %d predictions",
-        len(predicted_values)
-    )
-
-
-    # ========================================================
     # REGRESSION METRICS
-    # ========================================================
-
     rmse = np.sqrt(
         mean_squared_error(
             actual_values,
@@ -795,11 +515,7 @@ def main():
         predicted_values
     )
 
-
-    # ========================================================
     # CORRELATION
-    # ========================================================
-
     correlation = np.corrcoef(
         actual_values,
         predicted_values
@@ -811,11 +527,7 @@ def main():
         predicted_values
     )
 
-
-    # ========================================================
     # DIRECTION METRICS
-    # ========================================================
-
     actual_direction = (
         actual_values > 0
     ).astype(int)
@@ -843,32 +555,21 @@ def main():
     )
 
 
-    if (
-        positive_rate == 0
-        or positive_rate == 1
-    ):
-
-        logger.warning(
-            "Actual directions contain only "
-            "one class. Some classification "
-            "metrics may be undefined."
-        )
-
-
     baseline_accuracy = max(
         positive_rate,
         1 - positive_rate
     )
 
 
-    # ROC-AUC requires both classes.
+    # ROC-AUC requires both positive
+    # and negative observations
     if len(
         np.unique(actual_direction)
     ) < 2:
 
         logger.warning(
-            "ROC-AUC cannot be calculated "
-            "because only one class exists."
+            "Only one direction exists in actual results. "
+            "ROC-AUC cannot be calculated."
         )
 
         roc_auc = np.nan
@@ -890,11 +591,7 @@ def main():
         positive_rate
     )
 
-
-    # ========================================================
     # ERROR DISTRIBUTION
-    # ========================================================
-
     errors = (
         actual_values
         - predicted_values
@@ -908,40 +605,25 @@ def main():
         errors.std()
     )
 
-    median_absolute_error = (
-        np.median(
-            np.abs(errors)
-        )
+    median_absolute_error = np.median(
+        np.abs(errors)
     )
 
-    max_absolute_error = (
-        np.max(
-            np.abs(errors)
-        )
+    max_absolute_error = np.max(
+        np.abs(errors)
     )
 
-
-    # ========================================================
     # PREDICTION MAGNITUDE
-    # ========================================================
-
     prediction_magnitude = np.abs(
         predicted_values
     )
 
+    magnitude_error_correlation = np.corrcoef(
+        prediction_magnitude,
+        np.abs(errors)
+    )[0, 1]
 
-    magnitude_error_correlation = (
-        np.corrcoef(
-            prediction_magnitude,
-            np.abs(errors)
-        )[0, 1]
-    )
-
-
-    # ========================================================
     # TURNOVER
-    # ========================================================
-
     positions = np.sign(
         predicted_values
     )
@@ -955,8 +637,7 @@ def main():
     if len(positions) <= 1:
 
         logger.warning(
-            "Not enough positions to "
-            "calculate turnover rate."
+            "Not enough predictions to calculate turnover"
         )
 
         turnover_rate = np.nan
@@ -969,39 +650,30 @@ def main():
         )
 
 
+    # One useful summary log rather than
+    # logging every single metric separately
     logger.info(
-        "Metric calculation completed"
-    )
-
-
-    logger.debug(
-        "RMSE=%f, MAE=%f, R2=%f",
+        "Evaluation complete: "
+        "RMSE=%.6f, MAE=%.6f, R2=%.4f, Accuracy=%.4f",
         rmse,
         mae,
-        r_squared
+        r_squared,
+        accuracy
     )
 
-
-    # ========================================================
     # RESULTS
-    # ========================================================
-
     print("\nActual Standard Deviation:")
     print(return_std)
 
 
     if method == "1":
 
-        print(
-            "\nWalk-Forward Validation:"
-        )
+        print("\nWalk-Forward Validation:")
 
 
     elif method == "2":
 
-        print(
-            "\nPurged Cross-Validation:"
-        )
+        print("\nPurged Cross-Validation:")
 
 
     print("\nRMSE:")
@@ -1027,9 +699,7 @@ def main():
     print("\nDirectional Accuracy:")
     print(accuracy)
 
-    print(
-        "\nBaseline Directional Accuracy:"
-    )
+    print("\nBaseline Directional Accuracy:")
     print(baseline_accuracy)
 
     print("\nPrecision:")
@@ -1080,22 +750,18 @@ def main():
         "Program completed successfully"
     )
 
-
-# ============================================================
-# PROGRAM ENTRY POINT
-# ============================================================
-
+# RUN PROGRAM
 if __name__ == "__main__":
 
     try:
-
         main()
 
     except Exception:
 
+        # Gives us the full traceback
+        # for any unexpected fatal error
         logger.exception(
-            "Unexpected error caused "
-            "the program to terminate"
+            "Program terminated because of an error"
         )
 
         raise

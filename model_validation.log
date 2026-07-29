@@ -1,0 +1,10 @@
+2026-07-30 00:05:25,205 - INFO - Program started
+2026-07-30 00:05:25,205 - INFO - Downloading AAPL data
+2026-07-30 00:05:25,746 - INFO - Downloaded 1255 rows of AAPL data
+2026-07-30 00:05:51,870 - INFO - Predictor selected: Momentum, window/lag=20
+2026-07-30 00:05:57,731 - INFO - Validation method selected: Walk-forward
+2026-07-30 00:05:57,732 - INFO - Starting walk-forward validation
+2026-07-30 00:05:59,528 - WARNING - 23 rows removed because of missing values
+2026-07-30 00:06:00,012 - INFO - Walk-forward validation completed with 920 predictions
+2026-07-30 00:06:00,033 - INFO - Evaluation complete: RMSE=0.017953, MAE=0.012412, R2=-0.0038, Accuracy=0.5293
+2026-07-30 00:06:00,033 - INFO - Program completed successfully
