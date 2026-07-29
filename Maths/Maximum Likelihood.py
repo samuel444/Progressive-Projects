@@ -25,10 +25,6 @@ df = df.dropna()
 
 returns = df["Return"].values.flatten()
 
-print("First Returns:")
-print(returns[:5])
-
-
 
 # Estimate mu manually
 
