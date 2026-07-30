@@ -1,0 +1,3 @@
+/Users/sam/Progressive-Projects/build/CMakeFiles/Project_Template.dir
+/Users/sam/Progressive-Projects/build/CMakeFiles/edit_cache.dir
+/Users/sam/Progressive-Projects/build/CMakeFiles/rebuild_cache.dir
