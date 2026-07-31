@@ -430,3 +430,130 @@ for ticker in symbols:
 
     comparison_calls = comparisons["calls"]
     comparison_puts = comparisons["puts"]
+
+
+    # Highlight Significant Contracts Calls
+    comparison_calls["SpreadPct"] = (
+        comparison_calls["ask"] - comparison_calls["bid"]
+    ) / comparison_calls["MarketMid"]
+
+    comparison_calls["Moneyness"] = (
+        comparison_calls["strike"]
+        / comparison_calls["Current Stock Price"]
+    )
+
+    comparison_calls["PositiveRVCount"] = (
+        (comparison_calls["BS_RV20 AskEdge"] > 0).astype(int)
+        + (comparison_calls["BS_RV60 AskEdge"] > 0).astype(int)
+        + (comparison_calls["BS_RV252 AskEdge"] > 0).astype(int)
+    )
+
+    comparison_calls["MedianRVAskEdge"] = comparison_calls[[
+        "BS_RV20 AskEdge",
+        "BS_RV60 AskEdge",
+        "BS_RV252 AskEdge"
+    ]].median(axis=1)
+
+    highlighted_calls = comparison_calls[
+        # Need real executable quotes
+        comparison_calls["bid"].notna()
+        & comparison_calls["ask"].notna()
+
+        # Avoid extremely wide spreads
+        & (comparison_calls["SpreadPct"] <= 0.15)
+
+        # Avoid tiny option prices where percentages become ridiculous
+        & (comparison_calls["ask"] >= 0.50)
+
+        # Reasonable liquidity
+        & (comparison_calls["openInterest"] >= 100)
+        & (comparison_calls["volume"] >= 10)
+
+        # Stay reasonably close to ATM initially
+        & (comparison_calls["Moneyness"] >= 0.85)
+        & (comparison_calls["Moneyness"] <= 1.15)
+
+        # At least two realised-vol assumptions value it above the ask
+        & (comparison_calls["PositiveRVCount"] >= 2)
+
+        # Require a meaningful average/median edge
+        & (comparison_calls["MedianRVAskEdge"] >= 0.05)
+    ]
+
+
+
+    # Highlight Significant Contracts Puts
+    comparison_puts["SpreadPct"] = (
+        comparison_puts["ask"] - comparison_puts["bid"]
+    ) / comparison_puts["MarketMid"]
+
+    comparison_puts["Moneyness"] = (
+        comparison_puts["strike"]
+        / comparison_puts["Current Stock Price"]
+    )
+
+    comparison_puts["PositiveRVCount"] = (
+        (comparison_puts["BS_RV20 AskEdge"] > 0).astype(int)
+        + (comparison_puts["BS_RV60 AskEdge"] > 0).astype(int)
+        + (comparison_puts["BS_RV252 AskEdge"] > 0).astype(int)
+    )
+
+    comparison_puts["MedianRVAskEdge"] = comparison_puts[[
+        "BS_RV20 AskEdge",
+        "BS_RV60 AskEdge",
+        "BS_RV252 AskEdge"
+    ]].median(axis=1)
+
+    highlighted_puts = comparison_puts[
+        # Need real executable quotes
+        comparison_puts["bid"].notna()
+        & comparison_puts["ask"].notna()
+
+        # Avoid extremely wide spreads
+        & (comparison_puts["SpreadPct"] <= 0.15)
+
+        # Avoid tiny option prices where percentages become ridiculous
+        & (comparison_puts["ask"] >= 0.50)
+
+        # Reasonable liquidity
+        & (comparison_puts["openInterest"] >= 100)
+        & (comparison_puts["volume"] >= 10)
+
+        # Stay reasonably close to ATM initially
+        & (comparison_puts["Moneyness"] >= 0.85)
+        & (comparison_puts["Moneyness"] <= 1.15)
+
+        # At least two realised-vol assumptions value it above the ask
+        & (comparison_puts["PositiveRVCount"] >= 2)
+
+        # Require a meaningful average/median edge
+        & (comparison_puts["MedianRVAskEdge"] >= 0.05)
+    ]
+
+    important_cols = [
+        "contractSymbol",
+        "strike",
+        "bid",
+        "ask",
+        "Moneyness",
+        "MarketMid",
+        "impliedVolatility",
+        "RV20 Used",
+        "RV60 Used",
+        "RV252 Used",
+        "BS_RV20 AskEdge",
+        "BS_RV60 AskEdge",
+        "BS_RV252 AskEdge",
+        "MedianRVAskEdge",
+        "SpreadPct",
+        "volume",
+        "openInterest"
+    ]
+
+    print(f"{ticker}:")
+    print("Highlighted Call Options:")
+    print(highlighted_calls[important_cols])
+
+    print(f"\n{ticker}:")
+    print("Highlighted Put Options:")
+    print(highlighted_puts[important_cols])
