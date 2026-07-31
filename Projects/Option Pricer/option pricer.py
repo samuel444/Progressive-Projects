@@ -25,7 +25,13 @@ from sklearn.metrics import (
     r2_score
 )
 
+from matplotlib import pyplot as plt
+
+from scipy.stats import norm
+
 from sklearn.preprocessing import StandardScaler
+
+import yfinance as yf
 
 
 ridge_alphas = [
@@ -74,7 +80,11 @@ logger = logging.getLogger(__name__)
 
 def make_model_specs():
 
-    return [
+    logger.info(
+        "Creating model specifications"
+    )
+
+    models = [
         ("Train Mean", None),
         ("RV20 Baseline", None),
 
@@ -107,6 +117,14 @@ def make_model_specs():
         ("HAR-RV", None),
         ("GARCH", None)
     ]
+
+    logger.info(
+        "Created %d model configurations",
+        len(models)
+    )
+
+    return models
+
 
 def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
     # Read the expiry dates for the call and put chains
@@ -186,6 +204,12 @@ def create_model(
     alpha
 ):
 
+    logger.debug(
+        "Creating %s model with alpha=%s",
+        model_name,
+        alpha
+    )
+
     if model_name in [
         "OLS",
         "OLS PCA",
@@ -232,14 +256,25 @@ def create_model(
         )
 
 
+    logger.error(
+        "Unknown model requested: %s",
+        model_name
+    )
+
     raise ValueError(
         f"Unknown model: {model_name}"
     )
+
+
 
 def calculate_metrics(
     y_true,
     y_pred
 ):
+
+    logger.debug(
+        "Calculating evaluation metrics"
+    )
 
     y_true = np.asarray(
         y_true,
@@ -252,17 +287,34 @@ def calculate_metrics(
     )
 
 
-    # Remove invalid predictions if any
+    # Remove invalid predictions
     valid = (
         np.isfinite(y_true)
         & np.isfinite(y_pred)
     )
+
+    removed = (
+        len(y_true)
+        - valid.sum()
+    )
+
+    if removed > 0:
+
+        logger.warning(
+            "Removed %d invalid prediction pairs",
+            removed
+        )
+
 
     y_true = y_true[valid]
     y_pred = y_pred[valid]
 
 
     if len(y_true) == 0:
+
+        logger.warning(
+            "No valid observations available for metrics"
+        )
 
         return {
             "RMSE": np.nan,
@@ -328,6 +380,17 @@ def calculate_metrics(
         ic = np.nan
 
 
+    logger.debug(
+        "Metrics complete - N=%d, RMSE=%.5f, MAE=%.5f, R2=%.5f, NRMSE=%.5f, IC=%.5f",
+        len(y_true),
+        rmse,
+        mae,
+        r2,
+        nrmse,
+        ic
+    )
+
+
     return {
         "RMSE": rmse,
         "MAE": mae,
@@ -337,6 +400,7 @@ def calculate_metrics(
         "N": len(y_true)
     }
 
+
 def garch_predictions_for_block(
     ticker_df,
     test_dates,
@@ -345,11 +409,17 @@ def garch_predictions_for_block(
     lookback=1250
 ):
 
+    logger.debug(
+        "Starting GARCH block from %s to %s",
+        test_dates[0],
+        test_dates[-1]
+    )
+
+
     first_date = test_dates[0]
 
 
-    # Fit GARCH parameters only on returns
-    # before the test block
+    # Returns available before test block
     fit_returns = (
         ticker_df.loc[
             ticker_df.index < first_date,
@@ -367,12 +437,23 @@ def garch_predictions_for_block(
         )
 
 
+    logger.debug(
+        "GARCH parameter fit using %d returns",
+        len(fit_returns)
+    )
+
+
     if len(fit_returns) < min_returns:
+
+        logger.warning(
+            "Skipping GARCH block: only %d returns, minimum is %d",
+            len(fit_returns),
+            min_returns
+        )
 
         return None
 
 
-    # Percentage returns help numerical stability
     fit_returns = (
         fit_returns * 100
     )
@@ -389,6 +470,11 @@ def garch_predictions_for_block(
     )
 
 
+    logger.debug(
+        "Optimising GARCH(1,1) parameters"
+    )
+
+
     with warnings.catch_warnings():
 
         warnings.simplefilter(
@@ -401,18 +487,21 @@ def garch_predictions_for_block(
         )
 
 
-    # Keep parameters fixed during this test block
     params = fitted.params
+
+
+    logger.debug(
+        "GARCH parameter fit complete"
+    )
+
 
     predictions = []
 
 
     for forecast_date in test_dates:
 
-        # Returns through the forecast date are known
         history = (
-            ticker_df
-            .loc[
+            ticker_df.loc[
                 :forecast_date,
                 "Return"
             ]
@@ -442,8 +531,6 @@ def garch_predictions_for_block(
         )
 
 
-        # Update GARCH state using current history,
-        # but do not re-optimise parameters
         state_model = arch_model(
             history,
             mean="Constant",
@@ -478,8 +565,6 @@ def garch_predictions_for_block(
         )
 
 
-        # Convert mean future daily variance
-        # into annualised volatility
         predicted_rv = (
             np.sqrt(
                 np.mean(
@@ -496,9 +581,19 @@ def garch_predictions_for_block(
         )
 
 
-    return np.asarray(
+    predictions = np.asarray(
         predictions
     )
+
+
+    logger.debug(
+        "GARCH block complete with %d predictions",
+        np.isfinite(predictions).sum()
+    )
+
+
+    return predictions
+
 
 def evaluate_symbol_models(
     ticker_df,
@@ -510,7 +605,13 @@ def evaluate_symbol_models(
     min_train_rows=252
 ):
 
-    # Only drop rows needed by the models
+    logger.info(
+        "%s starting model evaluation",
+        symbol
+    )
+
+
+    # Select required data
     required_cols = list(
         dict.fromkeys(
             feature_cols
@@ -532,16 +633,28 @@ def evaluate_symbol_models(
     )
 
 
-    if len(model_df) < (
+    logger.info(
+        "%s has %d usable rows and %d features",
+        symbol,
+        len(model_df),
+        len(feature_cols)
+    )
+
+
+    minimum_required = (
         min_train_rows
         + rv_length
         + window
-    ):
+    )
+
+
+    if len(model_df) < minimum_required:
 
         logger.warning(
-            "%s skipped: only %d usable rows",
+            "%s skipped: %d rows available, %d required",
             symbol,
-            len(model_df)
+            len(model_df),
+            minimum_required
         )
 
         return pd.DataFrame()
@@ -552,7 +665,6 @@ def evaluate_symbol_models(
     )
 
 
-    # Store all walk-forward predictions
     prediction_store = {
         spec: {
             "y": [],
@@ -563,7 +675,6 @@ def evaluate_symbol_models(
     }
 
 
-    # First forecast must have enough training history
     first_test = max(
         int(
             len(model_df)
@@ -575,17 +686,25 @@ def evaluate_symbol_models(
     )
 
 
+    logger.info(
+        "%s walk-forward starts at row %d with window=%d, step=%d, purge=%d",
+        symbol,
+        first_test,
+        window,
+        step,
+        rv_length
+    )
+
+
     fold_count = 0
 
 
-    # Walk-forward folds
     for test_start in range(
         first_test,
         len(model_df) - window + 1,
         step
     ):
 
-        # Purge rv_length rows before test
         train_end = (
             test_start
             - rv_length
@@ -593,6 +712,12 @@ def evaluate_symbol_models(
 
 
         if train_end < min_train_rows:
+
+            logger.debug(
+                "%s fold skipped: training rows=%d",
+                symbol,
+                train_end
+            )
 
             continue
 
@@ -606,6 +731,20 @@ def evaluate_symbol_models(
             test_start:
             test_start + window
         ]
+
+
+        fold_count += 1
+
+
+        logger.debug(
+            "%s fold %d - train=%d rows, purge=%d, test=%d rows, test start=%s",
+            symbol,
+            fold_count,
+            len(train),
+            rv_length,
+            len(test),
+            test.index[0]
+        )
 
 
         y_train = (
@@ -637,7 +776,7 @@ def evaluate_symbol_models(
         )
 
 
-        # Scale using this training fold only
+        # Scale inside fold
         scaler = StandardScaler()
 
 
@@ -655,7 +794,14 @@ def evaluate_symbol_models(
         )
 
 
-        # PCA using this training fold only
+        logger.debug(
+            "%s fold %d scaling complete",
+            symbol,
+            fold_count
+        )
+
+
+        # Fit PCA inside fold
         pca = PCA(
             n_components=pca_variance,
             svd_solver="full"
@@ -673,6 +819,15 @@ def evaluate_symbol_models(
             pca.transform(
                 X_test_scaled
             )
+        )
+
+
+        logger.debug(
+            "%s fold %d PCA retained %d of %d components",
+            symbol,
+            fold_count,
+            X_train_pca.shape[1],
+            X_train_raw.shape[1]
         )
 
 
@@ -714,7 +869,7 @@ def evaluate_symbol_models(
         )
 
 
-        # Simple volatility persistence baseline
+        # RV20 baseline
         rv20_predictions = (
             test["RV20"]
             .to_numpy()
@@ -735,6 +890,13 @@ def evaluate_symbol_models(
         )
 
 
+        logger.debug(
+            "%s fold %d baselines complete",
+            symbol,
+            fold_count
+        )
+
+
         # Fit supervised models
         for (
             model_name,
@@ -750,7 +912,6 @@ def evaluate_symbol_models(
                 continue
 
 
-            # Choose correct feature representation
             if model_name == "HAR-RV":
 
                 X_fit = X_train_har
@@ -776,7 +937,6 @@ def evaluate_symbol_models(
 
             else:
 
-                # OLS and tree models use raw features
                 X_fit = X_train_raw
                 X_predict = X_test_raw
 
@@ -822,6 +982,13 @@ def evaluate_symbol_models(
             )
 
 
+        logger.debug(
+            "%s fold %d supervised models complete",
+            symbol,
+            fold_count
+        )
+
+
         # GARCH
         garch_predictions = (
             garch_predictions_for_block(
@@ -850,7 +1017,11 @@ def evaluate_symbol_models(
             )
 
 
-        fold_count += 1
+        logger.debug(
+            "%s fold %d complete",
+            symbol,
+            fold_count
+        )
 
 
     logger.info(
@@ -860,7 +1031,13 @@ def evaluate_symbol_models(
     )
 
 
-    # Calculate final metrics
+    # Calculate model metrics
+    logger.info(
+        "%s calculating model comparison metrics",
+        symbol
+    )
+
+
     results = []
 
 
@@ -895,6 +1072,18 @@ def evaluate_symbol_models(
         })
 
 
+        logger.info(
+            "%s %-20s alpha=%s RMSE=%.5f NRMSE=%.5f R2=%.5f IC=%.5f",
+            symbol,
+            model_name,
+            alpha,
+            metrics["RMSE"],
+            metrics["NRMSE"],
+            metrics["R2"],
+            metrics["IC"]
+        )
+
+
     comparison_table = (
         pd.DataFrame(
             results
@@ -909,7 +1098,301 @@ def evaluate_symbol_models(
     )
 
 
+    if not comparison_table.empty:
+
+        best = (
+            comparison_table
+            .iloc[0]
+        )
+
+
+        logger.info(
+            "%s evaluation complete - best model=%s, alpha=%s, RMSE=%.5f, NRMSE=%.5f",
+            symbol,
+            best["Model"],
+            best["Alpha"],
+            best["RMSE"],
+            best["NRMSE"]
+        )
+
+
     return comparison_table
+
+def monte_carlo_option_chain(
+    ticker,
+    calls,
+    puts,
+    df,
+    r=0.0375,
+    q=0.0,
+    simulations=10000,
+    vol_lookback=1260
+):
+
+    logger.info(
+        "%s starting Monte Carlo simulation",
+        ticker
+    )
+
+    call_chain = calls[0].copy()
+    put_chain = puts[0].copy()
+
+    expiry = pd.Timestamp(
+        calls[1]
+    )
+
+    today = pd.Timestamp.today().normalize()
+
+
+    # Time until the actual option expiry
+    calendar_days = (
+        expiry - today
+    ).days
+
+    if calendar_days <= 0:
+
+        raise ValueError(
+            f"{ticker} option expiry has passed"
+        )
+
+
+    T = calendar_days / 365
+
+
+    # Number of trading steps until expiry
+    steps = np.busday_count(
+        np.datetime64(today.date()),
+        np.datetime64(expiry.date())
+    )
+
+    steps = max(
+        int(steps),
+        1
+    )
+
+    dt = T / steps
+
+
+    # Current stock price
+    S0 = float(
+        df[("Close", ticker)]
+        .dropna()
+        .iloc[-1]
+    )
+
+
+    # Train-mean volatility forecast
+    historical_targets = (
+        df[("Target_RV", ticker)]
+        .dropna()
+        .iloc[-vol_lookback:]
+    )
+
+    sigma = float(
+        historical_targets.mean()
+    )
+
+
+    if (
+        not np.isfinite(sigma)
+        or sigma <= 0
+    ):
+
+        raise ValueError(
+            f"{ticker} has an invalid volatility forecast"
+        )
+
+
+    logger.info(
+        "%s Monte Carlo inputs - S0: %.2f, sigma: %.4f, T: %.4f, steps: %d, simulations: %d",
+        ticker,
+        S0,
+        sigma,
+        T,
+        steps,
+        simulations
+    )
+
+
+    rng = np.random.default_rng()
+
+
+    # Antithetic samples reduce simulation noise
+    half_simulations = (
+        simulations + 1
+    ) // 2
+
+    z_half = rng.standard_normal(
+        size=(
+            steps,
+            half_simulations
+        )
+    )
+
+    z = np.concatenate(
+        [
+            z_half,
+            -z_half
+        ],
+        axis=1
+    )
+
+    z = z[
+        :,
+        :simulations
+    ]
+
+
+    # Risk-neutral GBM increments
+    log_increments = (
+        (
+            r
+            - q
+            - 0.5 * sigma**2
+        )
+        * dt
+        + sigma
+        * np.sqrt(dt)
+        * z
+    )
+
+
+    # Build complete simulated paths
+    cumulative_log_returns = np.cumsum(
+        log_increments,
+        axis=0
+    )
+
+    cumulative_log_returns = np.vstack(
+        [
+            np.zeros(
+                simulations
+            ),
+            cumulative_log_returns
+        ]
+    )
+
+    paths = (
+        S0
+        * np.exp(
+            cumulative_log_returns
+        )
+    )
+
+
+    terminal_prices = paths[-1]
+
+    discount_factor = np.exp(
+        -r * T
+    )
+
+
+    # Price every call strike
+    call_strikes = (
+        call_chain["strike"]
+        .to_numpy(
+            dtype=float
+        )
+    )
+
+    call_payoffs = np.maximum(
+        terminal_prices[:, None]
+        - call_strikes[None, :],
+        0
+    )
+
+    call_prices = (
+        discount_factor
+        * call_payoffs.mean(
+            axis=0
+        )
+    )
+
+    call_standard_errors = (
+        discount_factor
+        * call_payoffs.std(
+            axis=0,
+            ddof=1
+        )
+        / np.sqrt(simulations)
+    )
+
+
+    # Price every put strike
+    put_strikes = (
+        put_chain["strike"]
+        .to_numpy(
+            dtype=float
+        )
+    )
+
+    put_payoffs = np.maximum(
+        put_strikes[None, :]
+        - terminal_prices[:, None],
+        0
+    )
+
+    put_prices = (
+        discount_factor
+        * put_payoffs.mean(
+            axis=0
+        )
+    )
+
+    put_standard_errors = (
+        discount_factor
+        * put_payoffs.std(
+            axis=0,
+            ddof=1
+        )
+        / np.sqrt(simulations)
+    )
+
+
+    # Add results to option chains
+    call_chain["MC_FV"] = (
+        call_prices
+    )
+
+    call_chain["MC_SE"] = (
+        call_standard_errors
+    )
+
+    call_chain["MC AskEdge"] = (
+        call_chain["MC_FV"]
+        - call_chain["ask"]
+    ) / call_chain["ask"]
+
+
+    put_chain["MC_FV"] = (
+        put_prices
+    )
+
+    put_chain["MC_SE"] = (
+        put_standard_errors
+    )
+
+    put_chain["MC AskEdge"] = (
+        put_chain["MC_FV"]
+        - put_chain["ask"]
+    ) / put_chain["ask"]
+
+
+    logger.info(
+        "%s Monte Carlo simulation complete",
+        ticker
+    )
+
+
+    return {
+        "paths": paths,
+        "terminal_prices": terminal_prices,
+        "calls": call_chain,
+        "puts": put_chain,
+        "sigma": sigma,
+        "T": T,
+        "steps": steps
+    }
 
 
 pd.set_option("display.max_columns", None)
@@ -1079,7 +1562,7 @@ logger.info("Target RV calculated")
 
 logger.info("Feature dataset created: %d usable rows", len(df))
 
-feature_cols = list(
+'''feature_cols = list(
     features.keys()
 )
 
@@ -1087,10 +1570,16 @@ feature_cols = list(
 comparison_tables = {}
 
 
+logger.info(
+    "Starting volatility forecasting for %d symbols",
+    len(symbols)
+)
+
+
 for symbol in symbols:
 
     logger.info(
-        "Starting volatility models for %s",
+        "Starting %s",
         symbol
     )
 
@@ -1102,6 +1591,13 @@ for symbol in symbols:
             level="Ticker"
         )
         .copy()
+    )
+
+
+    logger.info(
+        "%s extracted with %d rows",
+        symbol,
+        len(ticker_df)
     )
 
 
@@ -1123,13 +1619,24 @@ for symbol in symbols:
     ] = comparison_table
 
 
+    logger.info(
+        "%s finished",
+        symbol
+    )
+
+
     print(
         f"\n{symbol}:"
     )
 
     print(
         comparison_table
-    )
+    )'''
+
+
+logger.info(
+    "Volatility forecasting complete for all symbols"
+)
 
 
 # Download option chains
@@ -1207,7 +1714,7 @@ for ticker in symbols:
     BS_RV252_calls.name = "BS_RV252"
     BS_RV252_puts.name = "BS_RV252"
 
-    current_fv = df[("FV", ticker)].iloc[-1]
+    current_fv = df[("Target_RV", ticker)].iloc[-1260:].mean()
 
     logger.info(
         "%s volatility inputs - RV20: %.4f, RV60: %.4f, RV252: %.4f, FV: %.4f",
@@ -1331,16 +1838,6 @@ for ticker in symbols:
     comparison_calls = comparisons["calls"]
     comparison_puts = comparisons["puts"]
 
-    comparison_calls["Weighted BS Price"] = ((4*comparison_calls["BS_RV20"]) 
-            + (5*comparison_calls["BS_RV60"])
-            + comparison_calls["BS_RV252"]
-            + (10*comparison_calls["BS_FV"])) / 20
-    
-    comparison_puts["Weighted BS Price"] = ((4*comparison_puts["BS_RV20"]) 
-                + (5*comparison_puts["BS_RV60"])
-                + comparison_puts["BS_RV252"]
-                + (10*comparison_puts["BS_FV"])) / 20
-
 
     # Highlight Significant Contracts Calls
     comparison_calls["SpreadPct"] = (
@@ -1363,6 +1860,34 @@ for ticker in symbols:
             + (5*comparison_calls["BS_RV60 AskEdge"])
             + comparison_calls["BS_RV252 AskEdge"]
             + (10*comparison_calls["BS_FV AskEdge"])) / 20
+
+    # Minimum edge required for a buy signal
+    buy_edge = 0.05
+
+
+    comparison_calls["Recommended Action"] = np.select(
+        [
+            comparison_calls["BS_FV AskEdge"].isna(),
+
+            comparison_calls["BS_FV AskEdge"] >= buy_edge,
+
+            (
+                comparison_calls["BS_FV AskEdge"] > 0
+            )
+            & (
+                comparison_calls["BS_FV AskEdge"] < buy_edge
+            ),
+
+            comparison_calls["BS_FV AskEdge"] <= 0
+        ],
+        [
+            "No Data",
+            "Buy",
+            "Positive Edge",
+            "Do Not Buy"
+        ],
+        default="No Data"
+    )
 
     highlighted_calls = comparison_calls[
         # Need real executable quotes
@@ -1387,7 +1912,7 @@ for ticker in symbols:
         & (comparison_calls["PositiveRVCount"] >= 3)
 
         # Require a meaningful average/median edge
-        & (comparison_calls["WeightedRVAskEdge"] >= 0.05)
+        & (comparison_calls["BS_FV AskEdge"] >= 0.05)
     ]
 
 
@@ -1414,6 +1939,34 @@ for ticker in symbols:
             + comparison_puts["BS_RV252 AskEdge"]
             + (10*comparison_puts["BS_FV AskEdge"])) / 20
 
+# Minimum edge required for a buy signal
+    buy_edge = 0.05
+
+
+    comparison_puts["Recommended Action"] = np.select(
+        [
+            comparison_puts["BS_FV AskEdge"].isna(),
+
+            comparison_puts["BS_FV AskEdge"] >= buy_edge,
+
+            (
+                comparison_puts["BS_FV AskEdge"] > 0
+            )
+            & (
+                comparison_puts["BS_FV AskEdge"] < buy_edge
+            ),
+
+            comparison_puts["BS_FV AskEdge"] <= 0
+        ],
+        [
+            "No Data",
+            "Buy",
+            "Positive Edge",
+            "Do Not Buy"
+        ],
+        default="No Data"
+    )
+
     highlighted_puts = comparison_puts[
         # Need real executable quotes
         comparison_puts["bid"].notna()
@@ -1437,7 +1990,7 @@ for ticker in symbols:
         & (comparison_puts["PositiveRVCount"] >= 3)
 
         # Require a meaningful average/median edge
-        & (comparison_puts["WeightedRVAskEdge"] >= 0.05)
+        & (comparison_puts["BS_FV AskEdge"] >= 0.05)
     ]
 
     important_cols = [
@@ -1445,18 +1998,10 @@ for ticker in symbols:
         "strike",
         "bid",
         "ask",
-        "Weighted BS Price",
+        "BS_FV",
+        "BS_FV AskEdge",
         "Moneyness",
         "MarketMid",
-        "impliedVolatility",
-        "RV20 Used",
-        "RV60 Used",
-        "RV252 Used",
-        "BS_RV20 AskEdge",
-        "BS_RV60 AskEdge",
-        "BS_RV252 AskEdge",
-        "BS_FV AskEdge"
-        "WeightedRVAskEdge",
         "SpreadPct",
         "volume",
         "openInterest"
@@ -1469,3 +2014,102 @@ for ticker in symbols:
     print(f"\n{ticker}:")
     print("Highlighted Put Options:")
     print(highlighted_puts[important_cols])
+
+
+monte_carlo_results = {}
+
+
+for ticker in symbols:
+
+    if (
+        ticker not in chain_calls
+        or ticker not in chain_puts
+    ):
+
+        logger.warning(
+            "%s skipped because option chain is unavailable",
+            ticker
+        )
+
+        continue
+
+
+    result = monte_carlo_option_chain(
+        ticker=ticker,
+        calls=chain_calls[ticker],
+        puts=chain_puts[ticker],
+        df=df,
+        r=0.0375,
+        simulations=10000,
+        vol_lookback=1260
+    )
+
+
+    monte_carlo_results[
+        ticker
+    ] = result
+
+
+    paths = result["paths"]
+    terminal_prices = (
+        result["terminal_prices"]
+    )
+
+    median_path = np.median(paths, axis=1)
+
+
+    # Plot the first 100 paths
+    plt.plot(
+        paths[:, :100], alpha=0.4
+    )
+
+    plt.plot(
+        median_path,
+        linewidth=3,
+        label="Median simulation"
+    )
+
+    plt.xlabel(
+        "Trading Days"
+    )
+
+    plt.ylabel(
+        "Stock Price ($)"
+    )
+
+    plt.title(
+        f"{ticker} Monte Carlo Simulation"
+    )
+
+    plt.show()
+
+
+    # Plot terminal price distribution
+    plt.hist(
+        terminal_prices,
+        bins=50
+    )
+
+    plt.axvline(
+        df[("Close", ticker)]
+        .dropna()
+        .iloc[-1],
+        linestyle="--",
+        label="Current Price"
+    )
+
+    plt.xlabel(
+        "Price at Expiry ($)"
+    )
+
+    plt.ylabel(
+        "Frequency"
+    )
+
+    plt.title(
+        f"{ticker} Price Distribution at Expiry"
+    )
+
+    plt.legend()
+
+    plt.show()
