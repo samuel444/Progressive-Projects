@@ -1,9 +1,69 @@
-import yfinance as yf
-import numpy as np
-from matplotlib import pyplot as plt
-import pandas as pd
-from scipy.stats import norm
+import warnings
 import logging
+
+import numpy as np
+import pandas as pd
+
+from arch import arch_model
+
+from sklearn.decomposition import PCA
+
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    GradientBoostingRegressor
+)
+
+from sklearn.linear_model import (
+    LinearRegression,
+    Ridge,
+    Lasso
+)
+
+from sklearn.metrics import (
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score
+)
+
+from sklearn.preprocessing import StandardScaler
+
+
+ridge_alphas = [
+    0.0001,
+    0.001,
+    0.01,
+    0.1,
+    1,
+    10,
+    100,
+    1000
+]
+
+lasso_alphas = [
+    0.0001,
+    0.001,
+    0.01,
+    0.1,
+    1
+]
+
+
+har_features = [
+    "RV20",
+    "RV60",
+    "RV252"
+]
+
+
+pca_variance = 0.95
+
+window = 30
+step = 30
+
+min_train_rows = 252
+
+# Limit GARCH history for speed
+garch_lookback = 1250
 
 # Set up logging
 logging.basicConfig(
@@ -11,6 +71,42 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+def make_model_specs():
+
+    return [
+        ("Train Mean", None),
+        ("RV20 Baseline", None),
+
+        ("OLS", None),
+        ("OLS PCA", None),
+
+        *[
+            ("Ridge", alpha)
+            for alpha in ridge_alphas
+        ],
+
+        *[
+            ("Ridge PCA", alpha)
+            for alpha in ridge_alphas
+        ],
+
+        *[
+            ("Lasso", alpha)
+            for alpha in lasso_alphas
+        ],
+
+        *[
+            ("Lasso PCA", alpha)
+            for alpha in lasso_alphas
+        ],
+
+        ("Random Forest", None),
+        ("Gradient Boosting", None),
+
+        ("HAR-RV", None),
+        ("GARCH", None)
+    ]
 
 def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
     # Read the expiry dates for the call and put chains
@@ -85,6 +181,737 @@ def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
 
     return call_prices, put_prices
 
+def create_model(
+    model_name,
+    alpha
+):
+
+    if model_name in [
+        "OLS",
+        "OLS PCA",
+        "HAR-RV"
+    ]:
+
+        return LinearRegression()
+
+
+    if model_name in [
+        "Ridge",
+        "Ridge PCA"
+    ]:
+
+        return Ridge(
+            alpha=alpha
+        )
+
+
+    if model_name in [
+        "Lasso",
+        "Lasso PCA"
+    ]:
+
+        return Lasso(
+            alpha=alpha,
+            max_iter=100000
+        )
+
+
+    if model_name == "Random Forest":
+
+        return RandomForestRegressor(
+            n_estimators=100,
+            random_state=42,
+            n_jobs=-1
+        )
+
+
+    if model_name == "Gradient Boosting":
+
+        return GradientBoostingRegressor(
+            random_state=42
+        )
+
+
+    raise ValueError(
+        f"Unknown model: {model_name}"
+    )
+
+def calculate_metrics(
+    y_true,
+    y_pred
+):
+
+    y_true = np.asarray(
+        y_true,
+        dtype=float
+    )
+
+    y_pred = np.asarray(
+        y_pred,
+        dtype=float
+    )
+
+
+    # Remove invalid predictions if any
+    valid = (
+        np.isfinite(y_true)
+        & np.isfinite(y_pred)
+    )
+
+    y_true = y_true[valid]
+    y_pred = y_pred[valid]
+
+
+    if len(y_true) == 0:
+
+        return {
+            "RMSE": np.nan,
+            "MAE": np.nan,
+            "R2": np.nan,
+            "NRMSE": np.nan,
+            "IC": np.nan,
+            "N": 0
+        }
+
+
+    rmse = np.sqrt(
+        mean_squared_error(
+            y_true,
+            y_pred
+        )
+    )
+
+
+    mae = mean_absolute_error(
+        y_true,
+        y_pred
+    )
+
+
+    if len(y_true) > 1:
+
+        r2 = r2_score(
+            y_true,
+            y_pred
+        )
+
+    else:
+
+        r2 = np.nan
+
+
+    target_std = np.std(
+        y_true
+    )
+
+
+    nrmse = (
+        rmse / target_std
+        if target_std > 0
+        else np.nan
+    )
+
+
+    if (
+        len(y_true) > 1
+        and np.std(y_true) > 0
+        and np.std(y_pred) > 0
+    ):
+
+        ic = np.corrcoef(
+            y_true,
+            y_pred
+        )[0, 1]
+
+    else:
+
+        ic = np.nan
+
+
+    return {
+        "RMSE": rmse,
+        "MAE": mae,
+        "R2": r2,
+        "NRMSE": nrmse,
+        "IC": ic,
+        "N": len(y_true)
+    }
+
+def garch_predictions_for_block(
+    ticker_df,
+    test_dates,
+    rv_length,
+    min_returns=252,
+    lookback=1250
+):
+
+    first_date = test_dates[0]
+
+
+    # Fit GARCH parameters only on returns
+    # before the test block
+    fit_returns = (
+        ticker_df.loc[
+            ticker_df.index < first_date,
+            "Return"
+        ]
+        .dropna()
+    )
+
+
+    if lookback is not None:
+
+        fit_returns = (
+            fit_returns
+            .iloc[-lookback:]
+        )
+
+
+    if len(fit_returns) < min_returns:
+
+        return None
+
+
+    # Percentage returns help numerical stability
+    fit_returns = (
+        fit_returns * 100
+    )
+
+
+    garch = arch_model(
+        fit_returns,
+        mean="Constant",
+        vol="GARCH",
+        p=1,
+        q=1,
+        dist="normal",
+        rescale=False
+    )
+
+
+    with warnings.catch_warnings():
+
+        warnings.simplefilter(
+            "ignore"
+        )
+
+        fitted = garch.fit(
+            disp="off",
+            show_warning=False
+        )
+
+
+    # Keep parameters fixed during this test block
+    params = fitted.params
+
+    predictions = []
+
+
+    for forecast_date in test_dates:
+
+        # Returns through the forecast date are known
+        history = (
+            ticker_df
+            .loc[
+                :forecast_date,
+                "Return"
+            ]
+            .dropna()
+        )
+
+
+        if lookback is not None:
+
+            history = (
+                history
+                .iloc[-lookback:]
+            )
+
+
+        if len(history) < min_returns:
+
+            predictions.append(
+                np.nan
+            )
+
+            continue
+
+
+        history = (
+            history * 100
+        )
+
+
+        # Update GARCH state using current history,
+        # but do not re-optimise parameters
+        state_model = arch_model(
+            history,
+            mean="Constant",
+            vol="GARCH",
+            p=1,
+            q=1,
+            dist="normal",
+            rescale=False
+        )
+
+
+        fixed_model = (
+            state_model.fix(
+                params
+            )
+        )
+
+
+        forecast = (
+            fixed_model.forecast(
+                horizon=rv_length,
+                reindex=False
+            )
+        )
+
+
+        future_variance = (
+            forecast
+            .variance
+            .iloc[-1]
+            .to_numpy()
+        )
+
+
+        # Convert mean future daily variance
+        # into annualised volatility
+        predicted_rv = (
+            np.sqrt(
+                np.mean(
+                    future_variance
+                )
+                * 252
+            )
+            / 100
+        )
+
+
+        predictions.append(
+            predicted_rv
+        )
+
+
+    return np.asarray(
+        predictions
+    )
+
+def evaluate_symbol_models(
+    ticker_df,
+    feature_cols,
+    rv_length,
+    symbol,
+    window=30,
+    step=30,
+    min_train_rows=252
+):
+
+    # Only drop rows needed by the models
+    required_cols = list(
+        dict.fromkeys(
+            feature_cols
+            + har_features
+            + [
+                "Return",
+                "Target_RV"
+            ]
+        )
+    )
+
+
+    model_df = (
+        ticker_df[
+            required_cols
+        ]
+        .dropna()
+        .copy()
+    )
+
+
+    if len(model_df) < (
+        min_train_rows
+        + rv_length
+        + window
+    ):
+
+        logger.warning(
+            "%s skipped: only %d usable rows",
+            symbol,
+            len(model_df)
+        )
+
+        return pd.DataFrame()
+
+
+    model_specs = (
+        make_model_specs()
+    )
+
+
+    # Store all walk-forward predictions
+    prediction_store = {
+        spec: {
+            "y": [],
+            "pred": []
+        }
+
+        for spec in model_specs
+    }
+
+
+    # First forecast must have enough training history
+    first_test = max(
+        int(
+            len(model_df)
+            * 0.25
+        ),
+
+        min_train_rows
+        + rv_length
+    )
+
+
+    fold_count = 0
+
+
+    # Walk-forward folds
+    for test_start in range(
+        first_test,
+        len(model_df) - window + 1,
+        step
+    ):
+
+        # Purge rv_length rows before test
+        train_end = (
+            test_start
+            - rv_length
+        )
+
+
+        if train_end < min_train_rows:
+
+            continue
+
+
+        train = model_df.iloc[
+            :train_end
+        ]
+
+
+        test = model_df.iloc[
+            test_start:
+            test_start + window
+        ]
+
+
+        y_train = (
+            train["Target_RV"]
+            .to_numpy()
+        )
+
+
+        y_test = (
+            test["Target_RV"]
+            .to_numpy()
+        )
+
+
+        # Raw features
+        X_train_raw = (
+            train[
+                feature_cols
+            ]
+            .to_numpy()
+        )
+
+
+        X_test_raw = (
+            test[
+                feature_cols
+            ]
+            .to_numpy()
+        )
+
+
+        # Scale using this training fold only
+        scaler = StandardScaler()
+
+
+        X_train_scaled = (
+            scaler.fit_transform(
+                X_train_raw
+            )
+        )
+
+
+        X_test_scaled = (
+            scaler.transform(
+                X_test_raw
+            )
+        )
+
+
+        # PCA using this training fold only
+        pca = PCA(
+            n_components=pca_variance,
+            svd_solver="full"
+        )
+
+
+        X_train_pca = (
+            pca.fit_transform(
+                X_train_scaled
+            )
+        )
+
+
+        X_test_pca = (
+            pca.transform(
+                X_test_scaled
+            )
+        )
+
+
+        # HAR features
+        X_train_har = (
+            train[
+                har_features
+            ]
+            .to_numpy()
+        )
+
+
+        X_test_har = (
+            test[
+                har_features
+            ]
+            .to_numpy()
+        )
+
+
+        # Mean baseline
+        mean_predictions = np.full(
+            len(test),
+            y_train.mean()
+        )
+
+
+        prediction_store[
+            ("Train Mean", None)
+        ]["y"].extend(
+            y_test
+        )
+
+
+        prediction_store[
+            ("Train Mean", None)
+        ]["pred"].extend(
+            mean_predictions
+        )
+
+
+        # Simple volatility persistence baseline
+        rv20_predictions = (
+            test["RV20"]
+            .to_numpy()
+        )
+
+
+        prediction_store[
+            ("RV20 Baseline", None)
+        ]["y"].extend(
+            y_test
+        )
+
+
+        prediction_store[
+            ("RV20 Baseline", None)
+        ]["pred"].extend(
+            rv20_predictions
+        )
+
+
+        # Fit supervised models
+        for (
+            model_name,
+            alpha
+        ) in model_specs:
+
+            if model_name in [
+                "Train Mean",
+                "RV20 Baseline",
+                "GARCH"
+            ]:
+
+                continue
+
+
+            # Choose correct feature representation
+            if model_name == "HAR-RV":
+
+                X_fit = X_train_har
+                X_predict = X_test_har
+
+
+            elif model_name.endswith(
+                "PCA"
+            ):
+
+                X_fit = X_train_pca
+                X_predict = X_test_pca
+
+
+            elif model_name in [
+                "Ridge",
+                "Lasso"
+            ]:
+
+                X_fit = X_train_scaled
+                X_predict = X_test_scaled
+
+
+            else:
+
+                # OLS and tree models use raw features
+                X_fit = X_train_raw
+                X_predict = X_test_raw
+
+
+            current_model = (
+                create_model(
+                    model_name,
+                    alpha
+                )
+            )
+
+
+            current_model.fit(
+                X_fit,
+                y_train
+            )
+
+
+            predictions = (
+                current_model.predict(
+                    X_predict
+                )
+            )
+
+
+            key = (
+                model_name,
+                alpha
+            )
+
+
+            prediction_store[
+                key
+            ]["y"].extend(
+                y_test
+            )
+
+
+            prediction_store[
+                key
+            ]["pred"].extend(
+                predictions
+            )
+
+
+        # GARCH
+        garch_predictions = (
+            garch_predictions_for_block(
+                ticker_df=ticker_df,
+                test_dates=test.index,
+                rv_length=rv_length,
+                min_returns=min_train_rows,
+                lookback=garch_lookback
+            )
+        )
+
+
+        if garch_predictions is not None:
+
+            prediction_store[
+                ("GARCH", None)
+            ]["y"].extend(
+                y_test
+            )
+
+
+            prediction_store[
+                ("GARCH", None)
+            ]["pred"].extend(
+                garch_predictions
+            )
+
+
+        fold_count += 1
+
+
+    logger.info(
+        "%s completed %d walk-forward folds",
+        symbol,
+        fold_count
+    )
+
+
+    # Calculate final metrics
+    results = []
+
+
+    for (
+        model_name,
+        alpha
+    ) in model_specs:
+
+        key = (
+            model_name,
+            alpha
+        )
+
+
+        metrics = (
+            calculate_metrics(
+                prediction_store[
+                    key
+                ]["y"],
+
+                prediction_store[
+                    key
+                ]["pred"]
+            )
+        )
+
+
+        results.append({
+            "Model": model_name,
+            "Alpha": alpha,
+            **metrics
+        })
+
+
+    comparison_table = (
+        pd.DataFrame(
+            results
+        )
+        .sort_values(
+            by="RMSE",
+            na_position="last"
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+
+    return comparison_table
+
+
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
 
@@ -95,7 +922,7 @@ logger.info("Starting options pricing workflow for %d tickers", len(symbols))
 logger.info("Downloading historical stock data")
 df = yf.download(
     symbols,
-    period="max",
+    period="5y",
     interval="1d",
     auto_adjust=True,
     progress=False
@@ -236,12 +1063,76 @@ for name, feature in features.items():
     df = pd.concat([df, feature], axis=1)
 
 df = df.dropna()
-logger.info("Feature dataset created: %d usable rows", len(df))
-
-# Download option chains
 
 target_dte = 45
 
+rv_length = int(45 * (5/7))
+
+target_rv = r.rolling(rv_length).std().shift(-rv_length) * np.sqrt(252)
+
+target_rv.columns = pd.MultiIndex.from_product(
+    [["Target_RV"], target_rv.columns],
+    names=df.columns.names
+)
+df = pd.concat([df, target_rv], axis=1)
+logger.info("Target RV calculated")
+
+logger.info("Feature dataset created: %d usable rows", len(df))
+
+feature_cols = list(
+    features.keys()
+)
+
+
+comparison_tables = {}
+
+
+for symbol in symbols:
+
+    logger.info(
+        "Starting volatility models for %s",
+        symbol
+    )
+
+
+    ticker_df = (
+        df.xs(
+            symbol,
+            axis=1,
+            level="Ticker"
+        )
+        .copy()
+    )
+
+
+    comparison_table = (
+        evaluate_symbol_models(
+            ticker_df=ticker_df,
+            feature_cols=feature_cols,
+            rv_length=rv_length,
+            symbol=symbol,
+            window=window,
+            step=step,
+            min_train_rows=min_train_rows
+        )
+    )
+
+
+    comparison_tables[
+        symbol
+    ] = comparison_table
+
+
+    print(
+        f"\n{symbol}:"
+    )
+
+    print(
+        comparison_table
+    )
+
+
+# Download option chains
 target_date = (
     pd.Timestamp.today().normalize()
     + pd.Timedelta(days=target_dte)
@@ -312,14 +1203,19 @@ for ticker in symbols:
     BS_RV60_puts.name = "BS_RV60"
 
     current_rv252 = df[("RV252", ticker)].iloc[-1]
-
-    logger.info(
-        "%s volatility inputs - RV20: %.4f, RV60: %.4f, RV252: %.4f",
-        ticker, current_rv20, current_rv60, current_rv252
-    )
     BS_RV252_calls, BS_RV252_puts = black_scholes(calls,puts,current_price,sigma_calls=current_rv252)
     BS_RV252_calls.name = "BS_RV252"
     BS_RV252_puts.name = "BS_RV252"
+
+    current_fv = df[("FV", ticker)].iloc[-1]
+
+    logger.info(
+        "%s volatility inputs - RV20: %.4f, RV60: %.4f, RV252: %.4f, FV: %.4f",
+        ticker, current_rv20, current_rv60, current_rv252, current_fv
+    )
+    BS_FV_calls, BS_FV_puts = black_scholes(calls,puts,current_price,sigma_calls=current_fv)
+    BS_FV_calls.name = "BS_FV"
+    BS_FV_puts.name = "BS_FV"    
 
     cols = ["bid", "ask"]
     
@@ -331,7 +1227,8 @@ for ticker in symbols:
                 "IV": BS_IV_calls,
                 "RV20": BS_RV20_calls,
                 "RV60": BS_RV60_calls,
-                "RV252": BS_RV252_calls
+                "RV252": BS_RV252_calls,
+                "FV": BS_FV_calls
             }
         },
 
@@ -341,7 +1238,8 @@ for ticker in symbols:
                 "IV": BS_IV_puts,
                 "RV20": BS_RV20_puts,
                 "RV60": BS_RV60_puts,
-                "RV252": BS_RV252_puts
+                "RV252": BS_RV252_puts,
+                "FV": BS_FV_puts
             }
         }
     }
@@ -350,7 +1248,8 @@ for ticker in symbols:
     volatility_values = {
         "RV20": current_rv20,
         "RV60": current_rv60,
-        "RV252": current_rv252
+        "RV252": current_rv252,
+        "FV": current_fv
     }
 
     # Store finished comparison tables
@@ -386,6 +1285,7 @@ for ticker in symbols:
 
         # Add current stock price
         comparison["Current Stock Price"] = current_price
+
 
         # Calculate market midpoint
         comparison["MarketMid"] = (
@@ -431,6 +1331,16 @@ for ticker in symbols:
     comparison_calls = comparisons["calls"]
     comparison_puts = comparisons["puts"]
 
+    comparison_calls["Weighted BS Price"] = ((4*comparison_calls["BS_RV20"]) 
+            + (5*comparison_calls["BS_RV60"])
+            + comparison_calls["BS_RV252"]
+            + (10*comparison_calls["BS_FV"])) / 20
+    
+    comparison_puts["Weighted BS Price"] = ((4*comparison_puts["BS_RV20"]) 
+                + (5*comparison_puts["BS_RV60"])
+                + comparison_puts["BS_RV252"]
+                + (10*comparison_puts["BS_FV"])) / 20
+
 
     # Highlight Significant Contracts Calls
     comparison_calls["SpreadPct"] = (
@@ -446,13 +1356,13 @@ for ticker in symbols:
         (comparison_calls["BS_RV20 AskEdge"] > 0).astype(int)
         + (comparison_calls["BS_RV60 AskEdge"] > 0).astype(int)
         + (comparison_calls["BS_RV252 AskEdge"] > 0).astype(int)
+        + (comparison_calls["BS_FV AskEdge"] > 0).astype(int)
     )
 
-    comparison_calls["MedianRVAskEdge"] = comparison_calls[[
-        "BS_RV20 AskEdge",
-        "BS_RV60 AskEdge",
-        "BS_RV252 AskEdge"
-    ]].median(axis=1)
+    comparison_calls["WeightedRVAskEdge"] = ((4*comparison_calls["BS_RV20 AskEdge"]) 
+            + (5*comparison_calls["BS_RV60 AskEdge"])
+            + comparison_calls["BS_RV252 AskEdge"]
+            + (10*comparison_calls["BS_FV AskEdge"])) / 20
 
     highlighted_calls = comparison_calls[
         # Need real executable quotes
@@ -474,10 +1384,10 @@ for ticker in symbols:
         & (comparison_calls["Moneyness"] <= 1.15)
 
         # At least two realised-vol assumptions value it above the ask
-        & (comparison_calls["PositiveRVCount"] >= 2)
+        & (comparison_calls["PositiveRVCount"] >= 3)
 
         # Require a meaningful average/median edge
-        & (comparison_calls["MedianRVAskEdge"] >= 0.05)
+        & (comparison_calls["WeightedRVAskEdge"] >= 0.05)
     ]
 
 
@@ -496,13 +1406,13 @@ for ticker in symbols:
         (comparison_puts["BS_RV20 AskEdge"] > 0).astype(int)
         + (comparison_puts["BS_RV60 AskEdge"] > 0).astype(int)
         + (comparison_puts["BS_RV252 AskEdge"] > 0).astype(int)
+        + (comparison_puts["BS_FV AskEdge"] > 0).astype(int)
     )
 
-    comparison_puts["MedianRVAskEdge"] = comparison_puts[[
-        "BS_RV20 AskEdge",
-        "BS_RV60 AskEdge",
-        "BS_RV252 AskEdge"
-    ]].median(axis=1)
+    comparison_puts["WeightedRVAskEdge"] = ((4*comparison_puts["BS_RV20 AskEdge"]) 
+            + (5*comparison_puts["BS_RV60 AskEdge"])
+            + comparison_puts["BS_RV252 AskEdge"]
+            + (10*comparison_puts["BS_FV AskEdge"])) / 20
 
     highlighted_puts = comparison_puts[
         # Need real executable quotes
@@ -524,10 +1434,10 @@ for ticker in symbols:
         & (comparison_puts["Moneyness"] <= 1.15)
 
         # At least two realised-vol assumptions value it above the ask
-        & (comparison_puts["PositiveRVCount"] >= 2)
+        & (comparison_puts["PositiveRVCount"] >= 3)
 
         # Require a meaningful average/median edge
-        & (comparison_puts["MedianRVAskEdge"] >= 0.05)
+        & (comparison_puts["WeightedRVAskEdge"] >= 0.05)
     ]
 
     important_cols = [
@@ -535,6 +1445,7 @@ for ticker in symbols:
         "strike",
         "bid",
         "ask",
+        "Weighted BS Price",
         "Moneyness",
         "MarketMid",
         "impliedVolatility",
@@ -544,7 +1455,8 @@ for ticker in symbols:
         "BS_RV20 AskEdge",
         "BS_RV60 AskEdge",
         "BS_RV252 AskEdge",
-        "MedianRVAskEdge",
+        "BS_FV AskEdge"
+        "WeightedRVAskEdge",
         "SpreadPct",
         "volume",
         "openInterest"
