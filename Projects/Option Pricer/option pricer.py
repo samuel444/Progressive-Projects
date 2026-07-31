@@ -3,17 +3,28 @@ import numpy as np
 from matplotlib import pyplot as plt
 import pandas as pd
 from scipy.stats import norm
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
+    # Read the expiry dates for the call and put chains
     expiry_calls = calls[1]
     expiry_puts = puts[1]
 
+    # Use market IV unless another volatility value is supplied
     if sigma_calls is None:
         sigma_calls = calls[0]["impliedVolatility"] 
         sigma_puts = puts[0]["impliedVolatility"]
     else:
         sigma_puts = sigma_calls
 
+    # Convert time to expiry into years
     T_calls = (
         pd.Timestamp(expiry_calls) - pd.Timestamp.today().normalize()
     ).days / 365
@@ -22,9 +33,11 @@ def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
         ).days / 365
     
 
+    # Get strike prices for each contract
     strike_calls = calls[0]["strike"]
     strike_puts = puts[0]["strike"]
 
+    # Calculate d1 and d2 for calls
     d1_calls = (
         np.log(current_price / strike_calls)
         + (r + sigma_calls**2 / 2) * T_calls
@@ -37,6 +50,7 @@ def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
         - sigma_calls * np.sqrt(T_calls)
     )
 
+    # Calculate Black-Scholes call prices
     call_prices = (
         current_price * norm.cdf(d1_calls)
         - strike_calls
@@ -45,10 +59,9 @@ def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
     )
 
 
-    # -------------------------
-    # PUTS
-    # -------------------------
+    # Calculate put prices
 
+    # Calculate d1 and d2 for puts
     d1_puts = (
         np.log(current_price / strike_puts)
         + (r + sigma_puts**2 / 2) * T_puts
@@ -61,6 +74,7 @@ def black_scholes(calls,puts,current_price, r=0.0375, sigma_calls = None):
         - sigma_puts * np.sqrt(T_puts)
     )
 
+    # Calculate Black-Scholes put prices
     put_prices = (
         strike_puts
         * np.exp(-r * T_puts)
@@ -76,6 +90,9 @@ pd.set_option("display.max_rows", None)
 
 symbols = ["AAPL", "MSFT", "META", "WMT", "GOOGL", "AMZN", "HCA"]
 
+logger.info("Starting options pricing workflow for %d tickers", len(symbols))
+
+logger.info("Downloading historical stock data")
 df = yf.download(
     symbols,
     period="max",
@@ -84,13 +101,13 @@ df = yf.download(
     progress=False
 )
 
+logger.info("Historical stock data downloaded: %d rows", len(df))
+
 # Keep only closing prices
 df = df[["Close"]]
 
 
-# --------------------------------------------------
-# RETURNS
-# --------------------------------------------------
+# Calculate daily returns
 
 returns = df["Close"].pct_change()
 
@@ -100,25 +117,23 @@ returns.columns = pd.MultiIndex.from_product(
 )
 
 df = pd.concat([df, returns], axis=1)
+logger.info("Daily returns calculated")
 
 
 # Get returns with just ticker columns
 r = df["Return"]
 
 
-# -----------------------------
-# REALISED VOLATILITY
-# Used directly in Black-Scholes
-# -----------------------------
+# Calculate annualised realised volatility
+# These values can be used directly as sigma in Black-Scholes
 
 rv_20 = r.rolling(20).std() * np.sqrt(252)
 rv_60 = r.rolling(60).std() * np.sqrt(252)
 rv_252 = r.rolling(252).std() * np.sqrt(252)
+logger.info("RV20, RV60 and RV252 calculated")
 
 
-# -----------------------------
-# VOLATILITY FORECAST FEATURES
-# -----------------------------
+# Create features that may help forecast future volatility
 
 # Absolute and squared returns
 # Large values indicate volatility shocks
@@ -221,12 +236,9 @@ for name, feature in features.items():
     df = pd.concat([df, feature], axis=1)
 
 df = df.dropna()
+logger.info("Feature dataset created: %d usable rows", len(df))
 
-print(df.tail(10))
-
-# --------------------------------------------------
-# OPTION CHAINS
-# --------------------------------------------------
+# Download option chains
 
 target_dte = 45
 
@@ -240,11 +252,13 @@ chain_puts = {}
 
 for symbol in symbols:
 
+    logger.info("Downloading option chain for %s", symbol)
     ticker = yf.Ticker(symbol)
 
     expiries = ticker.options
 
     if len(expiries) == 0:
+        logger.warning("No option expiries found for %s", symbol)
         continue
 
     # Find available expiry closest to 45 days away
@@ -255,6 +269,7 @@ for symbol in symbols:
         )
     )
 
+    logger.info("%s expiry selected: %s", symbol, expiry)
     chain = ticker.option_chain(expiry)
 
     call = chain.calls
@@ -270,11 +285,17 @@ for symbol in symbols:
 
     chain_calls[symbol] = [call, expiry]
     chain_puts[symbol] = [put, expiry]
+    logger.info(
+        "%s option chain loaded: %d calls and %d puts",
+        symbol, len(call), len(put)
+    )
 
 for ticker in symbols:
+    logger.info("Pricing options for %s", ticker)
     calls = chain_calls[ticker]
     puts = chain_puts[ticker]
     current_price = df[("Close", ticker)].iloc[-1]
+    logger.info("%s current stock price: %.2f", ticker, current_price)
 
     BS_IV_calls, BS_IV_puts = black_scholes(calls,puts,current_price)
     BS_IV_calls.name = "BS_IV"
@@ -291,331 +312,121 @@ for ticker in symbols:
     BS_RV60_puts.name = "BS_RV60"
 
     current_rv252 = df[("RV252", ticker)].iloc[-1]
+
+    logger.info(
+        "%s volatility inputs - RV20: %.4f, RV60: %.4f, RV252: %.4f",
+        ticker, current_rv20, current_rv60, current_rv252
+    )
     BS_RV252_calls, BS_RV252_puts = black_scholes(calls,puts,current_price,sigma_calls=current_rv252)
     BS_RV252_calls.name = "BS_RV252"
     BS_RV252_puts.name = "BS_RV252"
 
     cols = ["bid", "ask"]
     
-    calls[0][cols] = calls[0][cols].replace(0.0, np.nan)
-
-    comparison_calls = calls[0][[
-        "contractSymbol",
-        "strike",
-        "bid",
-        "ask",
-        "lastPrice",
-        "impliedVolatility",
-        "volume",
-        "openInterest"
-    ]].copy()
-
-    comparison_calls["Current Stock Price"] = np.ones(len(calls[0])) * current_price
-
-    # Market midpoint
-    comparison_calls["MarketMid"] = (
-        comparison_calls["bid"] + comparison_calls["ask"]
-    ) / 2
-
-
-    # =========================================================
-    # IMPLIED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_calls["IV Used"] = calls[0]["impliedVolatility"]
-    comparison_calls["BS_IV"] = BS_IV_calls
+    # Store calls and puts with their Black-Scholes prices
+    option_types = {
+        "calls": {
+            "chain": calls[0],
+            "prices": {
+                "IV": BS_IV_calls,
+                "RV20": BS_RV20_calls,
+                "RV60": BS_RV60_calls,
+                "RV252": BS_RV252_calls
+            }
+        },
+
+        "puts": {
+            "chain": puts[0],
+            "prices": {
+                "IV": BS_IV_puts,
+                "RV20": BS_RV20_puts,
+                "RV60": BS_RV60_puts,
+                "RV252": BS_RV252_puts
+            }
+        }
+    }
+
+    # Store realised volatility values
+    volatility_values = {
+        "RV20": current_rv20,
+        "RV60": current_rv60,
+        "RV252": current_rv252
+    }
+
+    # Store finished comparison tables
+    comparisons = {}
+
+    for option_type, option_data in option_types.items():
+
+        chain = option_data["chain"]
+        prices = option_data["prices"]
+
+        # Replace zero bid and ask values because they are not useful market quotes
+        chain[cols] = chain[cols].replace(0.0, np.nan)
+
+        logger.info(
+            "%s %s with missing bid: %d, missing ask: %d",
+            ticker,
+            option_type,
+            chain["bid"].isna().sum(),
+            chain["ask"].isna().sum()
+        )
+
+        # Create comparison table
+        comparison = chain[[
+            "contractSymbol",
+            "strike",
+            "bid",
+            "ask",
+            "lastPrice",
+            "impliedVolatility",
+            "volume",
+            "openInterest"
+        ]].copy()
+
+        # Add current stock price
+        comparison["Current Stock Price"] = current_price
+
+        # Calculate market midpoint
+        comparison["MarketMid"] = (
+            comparison["bid"] + comparison["ask"]
+        ) / 2
+
+        # Loop through each volatility method
+        for model, model_prices in prices.items():
+
+            # Add volatility used
+            if model == "IV":
+                comparison["IV Used"] = chain["impliedVolatility"]
+
+            else:
+                comparison[f"{model} Used"] = volatility_values[model]
+
+            # Add Black-Scholes price
+            price_column = f"BS_{model}"
+
+            comparison[price_column] = model_prices
+
+            # Compare model price against market prices
+            for market_column, market_name in [
+                ("MarketMid", "Mid"),
+                ("ask", "Ask"),
+                ("bid", "Bid")
+            ]:
+
+                comparison[f"{price_column} - {market_name}"] = (
+                    comparison[price_column]
+                    - comparison[market_column]
+                )
+
+                comparison[f"{price_column} {market_name}Edge"] = (
+                    comparison[price_column]
+                    - comparison[market_column]
+                ) / comparison[market_column]
+
+        # Save finished table
+        comparisons[option_type] = comparison
 
-    comparison_calls["BS_IV - Mid"] = (
-        comparison_calls["BS_IV"]
-        - comparison_calls["MarketMid"]
-    )
 
-    comparison_calls["BS_IV - Ask"] = (
-        comparison_calls["BS_IV"]
-        - comparison_calls["ask"]
-    )
-
-    comparison_calls["BS_IV - Bid"] = (
-        comparison_calls["BS_IV"]
-        - comparison_calls["bid"]
-    )
-
-    comparison_calls["BS_IV BidEdge"] = (
-        comparison_calls["BS_IV"] - comparison_calls["bid"]
-    ) / comparison_calls["bid"]
-
-    comparison_calls["BS_IV MidEdge"] = (
-        comparison_calls["BS_IV"] - comparison_calls["MarketMid"]
-    ) / comparison_calls["MarketMid"]
-
-    comparison_calls["BS_IV AskEdge"] = (
-        comparison_calls["BS_IV"] - comparison_calls["ask"]
-    ) / comparison_calls["ask"]
-
-
-    # =========================================================
-    # 20-DAY REALISED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_calls["RV20 Used"] = current_rv20
-    comparison_calls["BS_RV20"] = BS_RV20_calls
-
-    comparison_calls["BS_RV20 - Mid"] = (
-        comparison_calls["BS_RV20"]
-        - comparison_calls["MarketMid"]
-    )
-
-    comparison_calls["BS_RV20 - Ask"] = (
-        comparison_calls["BS_RV20"]
-        - comparison_calls["ask"]
-    )
-
-    comparison_calls["BS_RV20 - Bid"] = (
-        comparison_calls["BS_RV20"]
-        - comparison_calls["bid"]
-    )
-
-    comparison_calls["BS_RV20 BidEdge"] = (
-        comparison_calls["BS_RV20"] - comparison_calls["bid"]
-    ) / comparison_calls["bid"]
-
-    comparison_calls["BS_RV20 MidEdge"] = (
-        comparison_calls["BS_RV20"] - comparison_calls["MarketMid"]
-    ) / comparison_calls["MarketMid"]
-
-    comparison_calls["BS_RV20 AskEdge"] = (
-        comparison_calls["BS_RV20"] - comparison_calls["ask"]
-    ) / comparison_calls["ask"]
-
-
-    # =========================================================
-    # 60-DAY REALISED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_calls["RV60 Used"] = current_rv60
-    comparison_calls["BS_RV60"] = BS_RV60_calls
-
-    comparison_calls["BS_RV60 - Mid"] = (
-        comparison_calls["BS_RV60"]
-        - comparison_calls["MarketMid"]
-    )
-
-    comparison_calls["BS_RV60 - Ask"] = (
-        comparison_calls["BS_RV60"]
-        - comparison_calls["ask"]
-    )
-
-    comparison_calls["BS_RV60 - Bid"] = (
-        comparison_calls["BS_RV60"]
-        - comparison_calls["bid"]
-    )
-
-    comparison_calls["BS_RV60 BidEdge"] = (
-        comparison_calls["BS_RV60"] - comparison_calls["bid"]
-    ) / comparison_calls["bid"]
-
-    comparison_calls["BS_RV60 MidEdge"] = (
-        comparison_calls["BS_RV60"] - comparison_calls["MarketMid"]
-    ) / comparison_calls["MarketMid"]
-
-    comparison_calls["BS_RV60 AskEdge"] = (
-        comparison_calls["BS_RV60"] - comparison_calls["ask"]
-    ) / comparison_calls["ask"]
-
-
-    # =========================================================
-    # 252-DAY REALISED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_calls["RV252 Used"] = current_rv252
-    comparison_calls["BS_RV252"] = BS_RV252_calls
-
-    comparison_calls["BS_RV252 - Mid"] = (
-        comparison_calls["BS_RV252"]
-        - comparison_calls["MarketMid"]
-    )
-
-    comparison_calls["BS_RV252 - Ask"] = (
-        comparison_calls["BS_RV252"]
-        - comparison_calls["ask"]
-    )
-
-    comparison_calls["BS_RV252 - Bid"] = (
-        comparison_calls["BS_RV252"]
-        - comparison_calls["bid"]
-    )
-
-    comparison_calls["BS_RV252 BidEdge"] = (
-        comparison_calls["BS_RV252"] - comparison_calls["bid"]
-    ) / comparison_calls["bid"]
-
-    comparison_calls["BS_RV252 MidEdge"] = (
-        comparison_calls["BS_RV252"] - comparison_calls["MarketMid"]
-    ) / comparison_calls["MarketMid"]
-
-    comparison_calls["BS_RV252 AskEdge"] = (
-        comparison_calls["BS_RV252"] - comparison_calls["ask"]
-    ) / comparison_calls["ask"]
-
-    puts[0][cols] = puts[0][cols].replace(0.0, np.nan)
-
-    comparison_puts = puts[0][[
-        "contractSymbol",
-        "strike",
-        "bid",
-        "ask",
-        "lastPrice",
-        "impliedVolatility",
-        "volume",
-        "openInterest"
-    ]].copy()
-
-    comparison_puts["Current Stock Price"] = np.ones(len(puts[0])) * current_price
-
-    # Market midpoint
-    comparison_puts["MarketMid"] = (
-        comparison_puts["bid"] + comparison_puts["ask"]
-    ) / 2
-
-
-    # =========================================================
-    # IMPLIED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_puts["IV Used"] = puts[0]["impliedVolatility"]
-    comparison_puts["BS_IV"] = BS_IV_puts
-
-    comparison_puts["BS_IV - Mid"] = (
-        comparison_puts["BS_IV"]
-        - comparison_puts["MarketMid"]
-    )
-
-    comparison_puts["BS_IV - Ask"] = (
-        comparison_puts["BS_IV"]
-        - comparison_puts["ask"]
-    )
-
-    comparison_puts["BS_IV - Bid"] = (
-        comparison_puts["BS_IV"]
-        - comparison_puts["bid"]
-    )
-
-    comparison_puts["BS_IV BidEdge"] = (
-        comparison_puts["BS_IV"] - comparison_puts["bid"]
-    ) / comparison_puts["bid"]
-
-    comparison_puts["BS_IV MidEdge"] = (
-        comparison_puts["BS_IV"] - comparison_puts["MarketMid"]
-    ) / comparison_puts["MarketMid"]
-
-    comparison_puts["BS_IV AskEdge"] = (
-        comparison_puts["BS_IV"] - comparison_puts["ask"]
-    ) / comparison_puts["ask"]
-
-
-    # =========================================================
-    # 20-DAY REALISED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_puts["RV20 Used"] = current_rv20
-    comparison_puts["BS_RV20"] = BS_RV20_puts
-
-    comparison_puts["BS_RV20 - Mid"] = (
-        comparison_puts["BS_RV20"]
-        - comparison_puts["MarketMid"]
-    )
-
-    comparison_puts["BS_RV20 - Ask"] = (
-        comparison_puts["BS_RV20"]
-        - comparison_puts["ask"]
-    )
-
-    comparison_puts["BS_RV20 - Bid"] = (
-        comparison_puts["BS_RV20"]
-        - comparison_puts["bid"]
-    )
-
-    comparison_puts["BS_RV20 BidEdge"] = (
-        comparison_puts["BS_RV20"] - comparison_puts["bid"]
-    ) / comparison_puts["bid"]
-
-    comparison_puts["BS_RV20 MidEdge"] = (
-        comparison_puts["BS_RV20"] - comparison_puts["MarketMid"]
-    ) / comparison_puts["MarketMid"]
-
-    comparison_puts["BS_RV20 AskEdge"] = (
-        comparison_puts["BS_RV20"] - comparison_puts["ask"]
-    ) / comparison_puts["ask"]
-
-
-    # =========================================================
-    # 60-DAY REALISED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_puts["RV60 Used"] = current_rv60
-    comparison_puts["BS_RV60"] = BS_RV60_puts
-
-    comparison_puts["BS_RV60 - Mid"] = (
-        comparison_puts["BS_RV60"]
-        - comparison_puts["MarketMid"]
-    )
-
-    comparison_puts["BS_RV60 - Ask"] = (
-        comparison_puts["BS_RV60"]
-        - comparison_puts["ask"]
-    )
-
-    comparison_puts["BS_RV60 - Bid"] = (
-        comparison_puts["BS_RV60"]
-        - comparison_puts["bid"]
-    )
-
-    comparison_puts["BS_RV60 BidEdge"] = (
-        comparison_puts["BS_RV60"] - comparison_puts["bid"]
-    ) / comparison_puts["bid"]
-
-    comparison_puts["BS_RV60 MidEdge"] = (
-        comparison_puts["BS_RV60"] - comparison_puts["MarketMid"]
-    ) / comparison_puts["MarketMid"]
-
-    comparison_puts["BS_RV60 AskEdge"] = (
-        comparison_puts["BS_RV60"] - comparison_puts["ask"]
-    ) / comparison_puts["ask"]
-
-
-    # =========================================================
-    # 252-DAY REALISED VOLATILITY BLACK-SCHOLES
-    # =========================================================
-
-    comparison_puts["RV252 Used"] = current_rv252
-    comparison_puts["BS_RV252"] = BS_RV252_puts
-
-    comparison_puts["BS_RV252 - Mid"] = (
-        comparison_puts["BS_RV252"]
-        - comparison_puts["MarketMid"]
-    )
-
-    comparison_puts["BS_RV252 - Ask"] = (
-        comparison_puts["BS_RV252"]
-        - comparison_puts["ask"]
-    )
-
-    comparison_puts["BS_RV252 - Bid"] = (
-        comparison_puts["BS_RV252"]
-        - comparison_puts["bid"]
-    )
-
-    comparison_puts["BS_RV252 BidEdge"] = (
-        comparison_puts["BS_RV252"] - comparison_puts["bid"]
-    ) / comparison_puts["bid"]
-
-    comparison_puts["BS_RV252 MidEdge"] = (
-        comparison_puts["BS_RV252"] - comparison_puts["MarketMid"]
-    ) / comparison_puts["MarketMid"]
-
-    comparison_puts["BS_RV252 AskEdge"] = (
-        comparison_puts["BS_RV252"] - comparison_puts["ask"]
-    ) / comparison_puts["ask"]
-
-    print(comparison_puts)
-
+    comparison_calls = comparisons["calls"]
+    comparison_puts = comparisons["puts"]
