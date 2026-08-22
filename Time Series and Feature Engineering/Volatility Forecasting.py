@@ -80,8 +80,11 @@ rmse = np.sqrt(mean_squared_error(y_test, predicted_values))
 mae = mean_absolute_error(y_test, predicted_values)
 r2 = r2_score(y_test, predicted_values)
 
+forest_nrmse = rmse / (y_test.std())
+
 print("\nForest Regressor Results:")
 print("RMSE:", rmse)
+print("NRMSE:", forest_nrmse)
 print("MAE:", mae)
 print("R²:", r2)
 
@@ -102,6 +105,8 @@ linear_rmse = np.sqrt(
     mean_squared_error(y_test, linear_predictions)
 )
 
+linear_nrmse = linear_rmse / (y_test.std())
+
 linear_mae = mean_absolute_error(
     y_test,
     linear_predictions
@@ -114,5 +119,6 @@ linear_r2 = r2_score(
 
 print("\nLinear Regression Results:")
 print("RMSE:", linear_rmse)
+print("NRMSE:", linear_nrmse)
 print("MAE:", linear_mae)
 print("R²:", linear_r2)

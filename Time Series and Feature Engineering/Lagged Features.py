@@ -15,3 +15,7 @@ apple = apple.dropna()
 
 print("\nApple Last 30 Days Data:")
 print(apple[["Close", "Yesterday", "Last Month", "Last Year", "Return", "Return Yesterday"]].tail(30))
+
+
+
+

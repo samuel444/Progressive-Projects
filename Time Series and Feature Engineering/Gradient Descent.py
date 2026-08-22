@@ -87,3 +87,6 @@ plt.ylabel("MSE")
 plt.title("Gradient Descent")
 
 plt.show()
+
+
+

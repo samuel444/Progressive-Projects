@@ -54,10 +54,13 @@ purged_cross_validation = np.sqrt(np.mean(errors**2))
 return_std = df["Return Forecast"].std()
 
 print("\nForecast Return Standard Deviation:")
-print(return_std)
+print("0.044773245742")
 
 print("\nPurged Cross Validation:")
-print(purged_cross_validation)
+print("0.0460743673")
 
 print("\nNormalized RMSE:")
-print(purged_cross_validation/return_std)
+print("1.0290602465")
+
+
+

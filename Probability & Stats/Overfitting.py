@@ -22,7 +22,7 @@ x_train, x_test, y_train, y_test = train_test_split(
 )
 
 
-degrees = [1,2,3,4,7,10,12]
+degrees = [1,2,3,5,7,10,15]
 results = []
 
 

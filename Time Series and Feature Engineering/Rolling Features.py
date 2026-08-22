@@ -15,3 +15,6 @@ apple = apple.dropna()
 
 print("\nApple Data:")
 print(apple[["Close", "Rolling Week Mean", "Rolling Quarter Median", "Rolling Month Std", "Rolling Year Min", "Rolling Max"]])
+
+
+

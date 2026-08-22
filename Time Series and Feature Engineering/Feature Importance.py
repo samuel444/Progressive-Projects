@@ -48,9 +48,7 @@ predictor_columns = [
     "Relative Volume 5",
     "Relative Volume 20",
     "Distance From High 5",
-    "Distance From High 20",
-    "Compounded Return 5",
-    "Compounded Return 20"
+    "Distance From High 20"
 ]
 
 
@@ -110,4 +108,5 @@ print("")
 
 for feature, importance in zip(predictor_columns,model.feature_importances_):
     print(f"{feature:<25} {importance:.4f}")
+
 

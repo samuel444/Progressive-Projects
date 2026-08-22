@@ -1,3 +1,11 @@
 {
-    "cmake.sourceDirectory": "/Users/sam/Progressive-Projects/C++/Project_Template"
+    "cmake.sourceDirectory": "/Users/sam/Progressive-Projects/C++/Project_Template",
+    "python-envs.pythonProjects": [
+        {
+            "path": "Projects/Option Pricer N Risk Engine",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:venv"
 }

@@ -16,9 +16,7 @@ df = yf.download(
     progress=False
 )
 
-days = int(
-    input("How many future days of volatility to predict: ")
-)
+days = int(input("How many future days of volatility to predict: "))
 
 df = df[["Close", "Volume"]]
 
@@ -175,6 +173,8 @@ pca_rmse = np.sqrt(
     )
 )
 
+pca_nrmse = pca_rmse / y_test.std()
+
 pca_mae = mean_absolute_error(
     y_test,
     pca_predictions
@@ -205,6 +205,8 @@ linear_rmse = np.sqrt(
     )
 )
 
+linear_nrmse = linear_rmse / y_test.std()
+
 linear_mae = mean_absolute_error(
     y_test,
     linear_predictions
@@ -233,6 +235,11 @@ comparison = pd.DataFrame({
         pca_rmse
     ],
 
+    "NRMSE": [
+        linear_nrmse,
+        pca_nrmse
+    ],
+
     "MAE": [
         linear_mae,
         pca_mae
@@ -246,3 +253,9 @@ comparison = pd.DataFrame({
 
 print("\nMODEL COMPARISON")
 print(comparison)
+
+
+
+
+
+
