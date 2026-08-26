@@ -6,6 +6,7 @@ from models import *
 from sklearn.preprocessing import StandardScaler
 
 from main_package import *
+
 FEATURE_DATABASE_PATH = (
     "/Users/sam/Progressive-Projects/Projects/"
     "Equity Selector/data/Features_Targets_Data.db"
@@ -1196,16 +1197,16 @@ MULTICLASS_MODELS = [
         },
     },
 
-    {
-        "name": "L2 Multinomial Logistic Regression",
-        "function": "fit_l2_multinomial_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "L2 Multinomial Logistic Regression",
+    #    "function": "fit_l2_multinomial_logistic_regression",
+    #    "scaled": True,
+    #    "search": "grid",
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
     #{
     #    "name": "L1 Multinomial Logistic Regression",
