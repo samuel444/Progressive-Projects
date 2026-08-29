@@ -115,6 +115,47 @@ stock_type_index = (
 
 
 ########################################
+# REWRITTEN: Analysis Mode
+########################################
+
+def choose_analysis_mode():
+    choices = {
+        "1": "DAILY",
+        "2": "INTRADAY",
+        "3": "COMBINED",
+        "daily": "DAILY",
+        "intraday": "INTRADAY",
+        "combined": "COMBINED",
+    }
+
+    while True:
+        print("\nSelect analysis mode:")
+        print("  1. Daily")
+        print("  2. Intraday")
+        print("  3. Combined")
+        answer = input("Analysis mode [1/2/3]: ").strip().lower()
+
+        if answer in choices:
+            return choices[answer]
+
+        print("Invalid selection. Enter 1, 2, or 3.")
+
+
+ANALYSIS_MODE = choose_analysis_mode()
+
+RESULT_TABLES = {
+    "DAILY": f"{STOCK_TYPE} Passed Test Results",
+    "INTRADAY": f"Intraday {STOCK_TYPE} Passed Test Results",
+}
+
+ACTIVE_ANALYSIS_TYPES = (
+    ["DAILY", "INTRADAY"]
+    if ANALYSIS_MODE == "COMBINED"
+    else [ANALYSIS_MODE]
+)
+
+
+########################################
 # SQL Helpers
 ########################################
 
@@ -143,21 +184,65 @@ def dataframe_memory_mb(dataframe):
 ########################################
 
 logger.info(
-    "Loading Most Predictable Results for %s",
+    "Loading passed results | mode=%s | stock type=%s",
+    ANALYSIS_MODE,
     STOCK_TYPE,
 )
+
+result_parts = []
 
 with sqlite3.connect(
     FINAL_RESULTS_DB
 ) as connection:
 
-    test_results = pd.read_sql_query(
-        f"""
-        SELECT *
-        FROM {quote_sql_identifier(f'Most Predictable Results {STOCK_TYPE}')}
-        """,
-        connection,
-    )
+    available_tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+
+    for analysis_type in ACTIVE_ANALYSIS_TYPES:
+
+        result_table = RESULT_TABLES[
+            analysis_type
+        ]
+
+        if result_table not in available_tables:
+            raise ValueError(
+                f"Missing {analysis_type} results table: "
+                f"{result_table}"
+            )
+
+        result_part = pd.read_sql_query(
+            f"""
+            SELECT *
+            FROM {quote_sql_identifier(result_table)}
+            """,
+            connection,
+        )
+
+        if result_part.empty:
+            raise ValueError(
+                f"Results table is empty: {result_table}"
+            )
+
+        result_part[
+            "Analysis Type"
+        ] = analysis_type
+
+        result_parts.append(
+            result_part
+        )
+
+
+test_results = pd.concat(
+    result_parts,
+    ignore_index=True,
+    sort=False,
+)
+
+del result_parts
 
 
 required_result_columns = {
@@ -165,8 +250,10 @@ required_result_columns = {
     "Model",
     "Parameters",
     "Target Type",
+    "Portfolio Target Type",
     "Horizon",
     "Quality Score",
+    "Analysis Type",
 }
 
 missing_result_columns = (
@@ -360,24 +447,56 @@ selected_models_df = (
 
 
 ########################################
-# Daily Horizons Only
+# REWRITTEN: Daily / Intraday Horizons
 ########################################
+
+DAILY_HORIZONS = {
+    1,
+    5,
+    20,
+    60,
+    120,
+    252,
+}
+
+INTRADAY_HORIZONS = {
+    1,
+    5,
+    15,
+    60,
+}
+
+valid_horizon = (
+    (
+        selected_models_df[
+            "Analysis Type"
+        ].eq(
+            "DAILY"
+        )
+        & selected_models_df[
+            "Horizon"
+        ].isin(
+            DAILY_HORIZONS
+        )
+    )
+    |
+    (
+        selected_models_df[
+            "Analysis Type"
+        ].eq(
+            "INTRADAY"
+        )
+        & selected_models_df[
+            "Horizon"
+        ].isin(
+            INTRADAY_HORIZONS
+        )
+    )
+)
 
 selected_models_df = (
     selected_models_df[
-        selected_models_df[
-            "Horizon"
-        ]
-        .isin(
-            [
-                1,
-                5,
-                20,
-                60,
-                120,
-                252,
-            ]
-        )
+        valid_horizon
     ]
     .copy()
 )
@@ -385,7 +504,7 @@ selected_models_df = (
 
 if selected_models_df.empty:
     raise ValueError(
-        "No daily selected models remain."
+        f"No {ANALYSIS_MODE.lower()} selected models remain."
     )
 
 
@@ -432,7 +551,8 @@ selected_models_df = (
     )
     .drop_duplicates(
         subset=[
-            "Target"
+            "Analysis Type",
+            "Target",
         ],
         keep="first",
     )
@@ -445,10 +565,12 @@ selected_models_df = (
 selected_models_df = (
     selected_models_df[
         [
+            "Analysis Type",
             "Target",
             "Model",
             "Parameters",
             "Target Type",
+            "Portfolio Target Type",
             "Horizon",
             "Quality Score",
         ]
@@ -516,7 +638,7 @@ logger.info(
         selected_models_df
     ),
     selected_models_df[
-        "Target Type"
+        "Portfolio Target Type"
     ].nunique(),
     len(
         required_features
@@ -743,6 +865,83 @@ logger.info(
     validation_start.date(),
     validation_end.date(),
 )
+
+
+########################################
+# REWRITTEN: Per-Frequency Purge Windows
+########################################
+
+RESEARCH_SPLITS = {}
+
+for analysis_type in ACTIVE_ANALYSIS_TYPES:
+
+    analysis_models = (
+        selected_models_df[
+            selected_models_df[
+                "Analysis Type"
+            ].eq(
+                analysis_type
+            )
+        ]
+    )
+
+    analysis_max_horizon = int(
+        analysis_models[
+            "Horizon"
+        ].max()
+    )
+
+    analysis_fit_end_index = (
+        validation_start_index
+        - analysis_max_horizon
+    )
+
+    if analysis_fit_end_index <= 0:
+        raise ValueError(
+            f"Not enough observations for the "
+            f"{analysis_type} validation period "
+            f"and a {analysis_max_horizon}-period purge."
+        )
+
+    RESEARCH_SPLITS[
+        analysis_type
+    ] = {
+        "fit_start": research_dates.iloc[0],
+        "fit_end": research_dates.iloc[
+            analysis_fit_end_index - 1
+        ],
+        "validation_start": research_dates.iloc[
+            validation_start_index
+        ],
+        "validation_end": research_dates.iloc[-1],
+        "max_horizon": analysis_max_horizon,
+    }
+
+    logger.info(
+        "%s split | fit=%s to %s | purge=%d | validation=%s to %s",
+        analysis_type,
+        RESEARCH_SPLITS[
+            analysis_type
+        ][
+            "fit_start"
+        ],
+        RESEARCH_SPLITS[
+            analysis_type
+        ][
+            "fit_end"
+        ],
+        analysis_max_horizon,
+        RESEARCH_SPLITS[
+            analysis_type
+        ][
+            "validation_start"
+        ],
+        RESEARCH_SPLITS[
+            analysis_type
+        ][
+            "validation_end"
+        ],
+    )
 
 
 ########################################
@@ -1040,196 +1239,379 @@ logger.info(
 
 HORIZON_SCORE_RANGES = {
 
+    ########################################
+    # Signed Returns / Alpha
+    ########################################
+
     "ALPHA": {
         "1m": (0.00, 0.20),
-        "5m": (0.05, 0.25),
+        "5m": (0.00, 0.25),
         "15m": (0.10, 0.30),
         "60m": (0.15, 0.40),
 
-        "1d": (0.25, 0.55),
+        "1d": (0.20, 0.55),
         "5d": (0.45, 0.75),
         "20d": (0.70, 0.95),
         "60d": (0.85, 1.00),
-        "120d": (0.75, 1.00),
-        "252d": (0.45, 0.80),
+        "120d": (0.70, 1.00),
+        "252d": (0.50, 0.80),
     },
 
     "RELATIVE_ALPHA": {
         "1m": (0.00, 0.15),
         "5m": (0.00, 0.20),
-        "15m": (0.05, 0.25),
+        "15m": (0.00, 0.25),
         "60m": (0.10, 0.35),
 
         "1d": (0.20, 0.50),
         "5d": (0.45, 0.75),
         "20d": (0.75, 1.00),
         "60d": (0.85, 1.00),
-        "120d": (0.75, 1.00),
-        "252d": (0.50, 0.85),
+        "120d": (0.70, 1.00),
+        "252d": (0.55, 0.85),
+    },
+
+    "RISK_ADJUSTED_ALPHA": {
+        "1m": (0.00, 0.20),
+        "5m": (0.00, 0.25),
+        "15m": (0.05, 0.30),
+        "60m": (0.15, 0.45),
+
+        "1d": (0.30, 0.60),
+        "5d": (0.55, 0.85),
+        "20d": (0.80, 1.00),
+        "60d": (0.85, 1.00),
+        "120d": (0.65, 0.95),
+        "252d": (0.45, 0.70),
     },
 
     "CROSS_SECTION_ALPHA": {
         "1m": (0.00, 0.15),
         "5m": (0.00, 0.20),
-        "15m": (0.05, 0.25),
+        "15m": (0.00, 0.25),
         "60m": (0.10, 0.35),
 
         "1d": (0.25, 0.55),
         "5d": (0.50, 0.80),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.60, 0.90),
-        "252d": (0.35, 0.65),
+        "120d": (0.55, 0.90),
+        "252d": (0.4, 0.65),
     },
 
+    "CROSS_SECTION_DOWNSIDE": {
+        "1m": (0.00, 0.20),
+        "5m": (0.00, 0.25),
+        "15m": (0.10, 0.35),
+        "60m": (0.20, 0.50),
+
+        "1d": (0.40, 0.70),
+        "5d": (0.65, 0.95),
+        "20d": (0.85, 1.00),
+        "60d": (0.80, 1.00),
+        "120d": (0.55, 0.85),
+        "252d": (0.35, 0.60),
+    },
+
+
+    ########################################
+    # Direction / Threshold Classification
+    ########################################
+
     "DIRECTION": {
-        "1m": (0.10, 0.40),
-        "5m": (0.15, 0.45),
-        "15m": (0.25, 0.55),
+        "1m": (0.00, 0.40),
+        "5m": (0.10, 0.45),
+        "15m": (0.20, 0.55),
         "60m": (0.40, 0.70),
 
         "1d": (0.60, 0.90),
         "5d": (0.85, 1.00),
         "20d": (0.75, 1.00),
-        "60d": (0.50, 0.80),
-        "120d": (0.25, 0.55),
-        "252d": (0.05, 0.35),
+        "60d": (0.45, 0.80),
+        "120d": (0.20, 0.55),
+        "252d": (0.00, 0.35),
+    },
+
+    "DIRECTION_MULTICLASS": {
+        "1m": (0.00, 0.35),
+        "5m": (0.10, 0.45),
+        "15m": (0.20, 0.55),
+        "60m": (0.35, 0.70),
+
+        "1d": (0.55, 0.90),
+        "5d": (0.80, 1.00),
+        "20d": (0.85, 1.00),
+        "60d": (0.65, 0.95),
+        "120d": (0.25, 0.60),
+        "252d": (0.00, 0.35),
     },
 
     "ALPHA_BINARY": {
-        "1m": (0.20, 0.50),
-        "5m": (0.30, 0.60),
-        "15m": (0.40, 0.70),
-        "60m": (0.55, 0.85),
+        "1m": (0.00, 0.50),
+        "5m": (0.20, 0.60),
+        "15m": (0.35, 0.70),
+        "60m": (0.50, 0.85),
 
-        "1d": (0.70, 1.00),
+        "1d": (0.65, 1.00),
         "5d": (0.85, 1.00),
         "20d": (0.70, 1.00),
-        "60d": (0.45, 0.75),
-        "120d": (0.20, 0.50),
-        "252d": (0.05, 0.35),
+        "60d": (0.40, 0.75),
+        "120d": (0.15, 0.50),
+        "252d": (0.00, 0.35),
     },
 
     "BARRIER_ALPHA": {
-        "1m": (0.25, 0.55),
-        "5m": (0.35, 0.65),
-        "15m": (0.45, 0.75),
-        "60m": (0.55, 0.85),
+        "1m": (0.00, 0.55),
+        "5m": (0.25, 0.65),
+        "15m": (0.40, 0.75),
+        "60m": (0.50, 0.85),
 
-        "1d": (0.70, 1.00),
+        "1d": (0.65, 1.00),
         "5d": (0.85, 1.00),
         "20d": (0.75, 1.00),
-        "60d": (0.50, 0.80),
-        "120d": (0.25, 0.55),
-        "252d": (0.05, 0.35),
+        "60d": (0.45, 0.80),
+        "120d": (0.20, 0.55),
+        "252d": (0.00, 0.35),
     },
 
-    "VOLATILITY": {
-        "1m": (0.15, 0.45),
-        "5m": (0.25, 0.55),
-        "15m": (0.35, 0.65),
-        "60m": (0.50, 0.80),
 
-        "1d": (0.65, 0.95),
+    ########################################
+    # Volatility / Absolute Movement
+    ########################################
+
+    "VOLATILITY": {
+        "1m": (0.00, 0.45),
+        "5m": (0.20, 0.55),
+        "15m": (0.30, 0.65),
+        "60m": (0.45, 0.80),
+
+        "1d": (0.60, 0.95),
         "5d": (0.85, 1.00),
         "20d": (0.80, 1.00),
-        "60d": (0.65, 0.95),
-        "120d": (0.45, 0.75),
+        "60d": (0.60, 0.95),
+        "120d": (0.40, 0.75),
         "252d": (0.25, 0.55),
     },
 
+    "ABSOLUTE_MOVE": {
+        "1m": (0.20, 0.55),
+        "5m": (0.30, 0.65),
+        "15m": (0.40, 0.75),
+        "60m": (0.55, 0.85),
+
+        "1d": (0.65, 0.95),
+        "5d": (0.85, 1.00),
+        "20d": (0.85, 1.00),
+        "60d": (0.65, 0.95),
+        "120d": (0.35, 0.70),
+        "252d": (0.2, 0.45),
+    },
+
+    "UPSIDE_VOLATILITY": {
+        "1m": (0.10, 0.45),
+        "5m": (0.20, 0.55),
+        "15m": (0.30, 0.65),
+        "60m": (0.45, 0.80),
+
+        "1d": (0.60, 0.95),
+        "5d": (0.80, 1.00),
+        "20d": (0.85, 1.00),
+        "60d": (0.65, 0.95),
+        "120d": (0.35, 0.70),
+        "252d": (0.25, 0.50),
+    },
+
+    "DOWNSIDE_VOLATILITY": {
+        "1m": (0.15, 0.50),
+        "5m": (0.25, 0.60),
+        "15m": (0.35, 0.70),
+        "60m": (0.50, 0.85),
+
+        "1d": (0.65, 1.00),
+        "5d": (0.85, 1.00),
+        "20d": (0.85, 1.00),
+        "60d": (0.70, 1.00),
+        "120d": (0.40, 0.75),
+        "252d": (0.2, 0.55),
+    },
+
+    "VOLATILITY_ASYMMETRY": {
+        "1m": (0.00, 0.35),
+        "5m": (0.10, 0.45),
+        "15m": (0.20, 0.55),
+        "60m": (0.35, 0.70),
+
+        "1d": (0.50, 0.85),
+        "5d": (0.70, 1.00),
+        "20d": (0.85, 1.00),
+        "60d": (0.75, 1.00),
+        "120d": (0.40, 0.75),
+        "252d": (0.25, 0.50),
+    },
+
     "VOLATILITY_EVENT": {
-        "1m": (0.50, 0.80),
-        "5m": (0.60, 0.90),
+        "1m": (0.45, 0.80),
+        "5m": (0.55, 0.90),
         "15m": (0.70, 1.00),
         "60m": (0.80, 1.00),
 
         "1d": (0.80, 1.00),
-        "5d": (0.65, 0.95),
-        "20d": (0.40, 0.70),
-        "60d": (0.20, 0.50),
-        "120d": (0.05, 0.35),
+        "5d": (0.60, 0.95),
+        "20d": (0.35, 0.70),
+        "60d": (0.10, 0.50),
+        "120d": (0.00, 0.35),
         "252d": (0.00, 0.20),
     },
 
-    "DOWNSIDE": {
-        "1m": (0.25, 0.55),
-        "5m": (0.35, 0.65),
-        "15m": (0.45, 0.75),
-        "60m": (0.60, 0.90),
 
-        "1d": (0.75, 1.00),
+    ########################################
+    # Downside / Tail Risk
+    ########################################
+
+    "DOWNSIDE": {
+        "1m": (0.20, 0.55),
+        "5m": (0.30, 0.65),
+        "15m": (0.40, 0.75),
+        "60m": (0.55, 0.90),
+
+        "1d": (0.70, 1.00),
         "5d": (0.85, 1.00),
         "20d": (0.75, 1.00),
-        "60d": (0.55, 0.85),
-        "120d": (0.35, 0.65),
+        "60d": (0.50, 0.85),
+        "120d": (0.30, 0.65),
         "252d": (0.15, 0.45),
     },
 
     "TAIL_RISK": {
-        "1m": (0.40, 0.70),
-        "5m": (0.50, 0.80),
-        "15m": (0.60, 0.90),
-        "60m": (0.70, 1.00),
+        "1m": (0.35, 0.70),
+        "5m": (0.45, 0.80),
+        "15m": (0.55, 0.90),
+        "60m": (0.65, 1.00),
 
         "1d": (0.85, 1.00),
         "5d": (0.80, 1.00),
         "20d": (0.60, 0.90),
-        "60d": (0.35, 0.65),
-        "120d": (0.15, 0.45),
+        "60d": (0.30, 0.65),
+        "120d": (0.10, 0.45),
         "252d": (0.00, 0.30),
     },
 
     "TAIL_EVENT": {
-        "1m": (0.85, 1.00),
+        "1m": (0.80, 1.00),
         "5m": (0.85, 1.00),
         "15m": (0.80, 1.00),
-        "60m": (0.70, 1.00),
+        "60m": (0.65, 1.00),
 
-        "1d": (0.60, 0.90),
-        "5d": (0.35, 0.65),
-        "20d": (0.10, 0.40),
+        "1d": (0.55, 0.90),
+        "5d": (0.30, 0.65),
+        "20d": (0.00, 0.40),
         "60d": (0.00, 0.25),
         "120d": (0.00, 0.15),
         "252d": (0.00, 0.10),
     },
 
     "UPSIDE_RISK": {
-        "1m": (0.20, 0.50),
-        "5m": (0.30, 0.60),
-        "15m": (0.40, 0.70),
-        "60m": (0.55, 0.85),
+        "1m": (0.15, 0.50),
+        "5m": (0.25, 0.60),
+        "15m": (0.35, 0.70),
+        "60m": (0.50, 0.85),
 
-        "1d": (0.70, 1.00),
+        "1d": (0.65, 1.00),
         "5d": (0.85, 1.00),
         "20d": (0.70, 1.00),
-        "60d": (0.45, 0.75),
-        "120d": (0.25, 0.55),
-        "252d": (0.05, 0.35),
+        "60d": (0.40, 0.75),
+        "120d": (0.20, 0.55),
+        "252d": (0.00, 0.35),
     },
 
     "UPSIDE_EVENT": {
-        "1m": (0.85, 1.00),
+        "1m": (0.80, 1.00),
         "5m": (0.85, 1.00),
         "15m": (0.80, 1.00),
-        "60m": (0.70, 1.00),
+        "60m": (0.65, 1.00),
 
-        "1d": (0.55, 0.85),
-        "5d": (0.30, 0.60),
-        "20d": (0.05, 0.35),
+        "1d": (0.50, 0.85),
+        "5d": (0.25, 0.60),
+        "20d": (0.00, 0.35),
         "60d": (0.00, 0.20),
         "120d": (0.00, 0.15),
         "252d": (0.00, 0.10),
     },
 
-    "RECOVERY": {
-        "1m": (0.85, 1.00),
-        "5m": (0.85, 1.00),
-        "15m": (0.80, 1.00),
-        "60m": (0.70, 1.00),
+
+    ########################################
+    # Excursions
+    ########################################
+
+    "UPSIDE_EXCURSION": {
+        "1m": (0.50, 0.85),
+        "5m": (0.60, 0.95),
+        "15m": (0.70, 1.00),
+        "60m": (0.75, 1.00),
+
+        "1d": (0.75, 1.00),
+        "5d": (0.85, 1.00),
+        "20d": (0.70, 1.00),
+        "60d": (0.45, 0.80),
+        "120d": (0.15, 0.50),
+        "252d": (0.00, 0.30),
+    },
+
+    "DOWNSIDE_EXCURSION": {
+        "1m": (0.55, 0.90),
+        "5m": (0.65, 1.00),
+        "15m": (0.75, 1.00),
+        "60m": (0.80, 1.00),
+
+        "1d": (0.80, 1.00),
+        "5d": (0.85, 1.00),
+        "20d": (0.75, 1.00),
+        "60d": (0.50, 0.85),
+        "120d": (0.20, 0.55),
+        "252d": (0.00, 0.35),
+    },
+
+    "TIME_TO_UPSIDE_EXCURSION": {
+        "1m": (0.00, 0.40),
+        "5m": (0.15, 0.50),
+        "15m": (0.30, 0.65),
+        "60m": (0.50, 0.80),
 
         "1d": (0.50, 0.80),
-        "5d": (0.20, 0.50),
+        "5d": (0.65, 0.95),
+        "20d": (0.80, 1.00),
+        "60d": (0.70, 1.00),
+        "120d": (0.30, 0.65),
+        "252d": (0.00, 0.35),
+    },
+
+    "TIME_TO_DOWNSIDE_EXCURSION": {
+        "1m": (0.00, 0.45),
+        "5m": (0.20, 0.55),
+        "15m": (0.35, 0.70),
+        "60m": (0.55, 0.85),
+
+        "1d": (0.55, 0.85),
+        "5d": (0.70, 1.00),
+        "20d": (0.85, 1.00),
+        "60d": (0.75, 1.00),
+        "120d": (0.35, 0.70),
+        "252d": (0.10, 0.40),
+    },
+
+
+    ########################################
+    # Recovery / Reversal
+    ########################################
+
+    "RECOVERY": {
+        "1m": (0.80, 1.00),
+        "5m": (0.85, 1.00),
+        "15m": (0.80, 1.00),
+        "60m": (0.65, 1.00),
+
+        "1d": (0.45, 0.80),
+        "5d": (0.15, 0.50),
         "20d": (0.00, 0.30),
         "60d": (0.00, 0.15),
         "120d": (0.00, 0.10),
@@ -1237,70 +1619,80 @@ HORIZON_SCORE_RANGES = {
     },
 
     "REVERSAL": {
-        "1m": (0.85, 1.00),
+        "1m": (0.80, 1.00),
         "5m": (0.85, 1.00),
         "15m": (0.80, 1.00),
-        "60m": (0.70, 1.00),
+        "60m": (0.65, 1.00),
 
-        "1d": (0.50, 0.80),
-        "5d": (0.20, 0.50),
+        "1d": (0.45, 0.80),
+        "5d": (0.15, 0.50),
         "20d": (0.00, 0.30),
         "60d": (0.00, 0.15),
         "120d": (0.00, 0.10),
         "252d": (0.00, 0.05),
     },
 
+
+    ########################################
+    # State / Dependence
+    ########################################
+
     "REGIME": {
         "1m": (0.00, 0.25),
-        "5m": (0.05, 0.30),
-        "15m": (0.05, 0.35),
-        "60m": (0.15, 0.45),
+        "5m": (0.00, 0.30),
+        "15m": (0.00, 0.35),
+        "60m": (0.10, 0.45),
 
-        "1d": (0.35, 0.65),
-        "5d": (0.60, 0.90),
+        "1d": (0.30, 0.65),
+        "5d": (0.55, 0.90),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.65, 0.95),
-        "252d": (0.45, 0.75),
+        "120d": (0.60, 0.95),
+        "252d": (0.50, 0.75),
     },
 
     "CORRELATION": {
         "1m": (0.00, 0.25),
-        "5m": (0.05, 0.30),
-        "15m": (0.10, 0.40),
-        "60m": (0.20, 0.50),
+        "5m": (0.00, 0.30),
+        "15m": (0.05, 0.40),
+        "60m": (0.15, 0.50),
 
-        "1d": (0.40, 0.70),
-        "5d": (0.65, 0.95),
+        "1d": (0.35, 0.70),
+        "5d": (0.60, 0.95),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.65, 0.95),
-        "252d": (0.45, 0.75),
+        "120d": (0.60, 0.95),
+        "252d": (0.50, 0.75),
     },
 
     "COVARIANCE": {
         "1m": (0.00, 0.25),
-        "5m": (0.05, 0.30),
-        "15m": (0.10, 0.40),
-        "60m": (0.20, 0.50),
+        "5m": (0.00, 0.30),
+        "15m": (0.05, 0.40),
+        "60m": (0.15, 0.50),
 
-        "1d": (0.40, 0.70),
-        "5d": (0.65, 0.95),
+        "1d": (0.35, 0.70),
+        "5d": (0.60, 0.95),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.65, 0.95),
-        "252d": (0.45, 0.75),
+        "120d": (0.60, 0.95),
+        "252d": (0.50, 0.75),
     },
 
+
+    ########################################
+    # Market Structure / Execution
+    ########################################
+
     "LIQUIDITY": {
-        "1m": (0.65, 0.95),
+        "1m": (0.60, 0.95),
         "5m": (0.75, 1.00),
         "15m": (0.85, 1.00),
         "60m": (0.80, 1.00),
 
-        "1d": (0.55, 0.85),
-        "5d": (0.25, 0.55),
-        "20d": (0.05, 0.35),
+        "1d": (0.50, 0.85),
+        "5d": (0.20, 0.55),
+        "20d": (0.00, 0.35),
         "60d": (0.00, 0.20),
         "120d": (0.00, 0.10),
         "252d": (0.00, 0.05),
@@ -1310,10 +1702,10 @@ HORIZON_SCORE_RANGES = {
         "1m": (0.85, 1.00),
         "5m": (0.85, 1.00),
         "15m": (0.80, 1.00),
-        "60m": (0.65, 0.95),
+        "60m": (0.60, 0.95),
 
-        "1d": (0.25, 0.55),
-        "5d": (0.05, 0.30),
+        "1d": (0.20, 0.55),
+        "5d": (0.00, 0.30),
         "20d": (0.00, 0.15),
         "60d": (0.00, 0.10),
         "120d": (0.00, 0.05),
@@ -1324,10 +1716,10 @@ HORIZON_SCORE_RANGES = {
         "1m": (0.85, 1.00),
         "5m": (0.85, 1.00),
         "15m": (0.80, 1.00),
-        "60m": (0.65, 0.95),
+        "60m": (0.60, 0.95),
 
-        "1d": (0.25, 0.55),
-        "5d": (0.05, 0.30),
+        "1d": (0.20, 0.55),
+        "5d": (0.00, 0.30),
         "20d": (0.00, 0.15),
         "60d": (0.00, 0.10),
         "120d": (0.00, 0.05),
@@ -1336,7 +1728,7 @@ HORIZON_SCORE_RANGES = {
 }
 
 ########################################
-# Daily Horizon Helpers
+# REWRITTEN: Daily / Intraday Horizon Helpers
 ########################################
 
 HORIZON_STEP = 0.05
@@ -1345,8 +1737,20 @@ HORIZON_INDEX = 2
 
 def horizon_key(row):
 
+    suffix = (
+        "m"
+        if str(
+            row.get(
+                "Analysis Type",
+                "DAILY",
+            )
+        ).upper()
+        == "INTRADAY"
+        else "d"
+    )
+
     return (
-        f"{int(row['Horizon'])}d"
+        f"{int(row['Horizon'])}{suffix}"
     )
 
 
@@ -1370,7 +1774,7 @@ for _, row in selected_models_df.iterrows():
     target_type = (
         str(
             row[
-                "Target Type"
+                "Portfolio Target Type"
             ]
         )
         .upper()
@@ -1428,14 +1832,14 @@ if unsupported_parameters:
 active_parameters = (
     selected_models_df[
         [
-            "Target Type",
+            "Portfolio Target Type",
             "Horizon Key",
         ]
     ]
     .drop_duplicates()
     .sort_values(
         [
-            "Target Type",
+            "Portfolio Target Type",
             "Horizon Key",
         ]
     )
@@ -1450,7 +1854,7 @@ ACTIVE_HORIZON_SCORE_RANGES = {}
 for _, row in active_parameters.iterrows():
 
     target_type = row[
-        "Target Type"
+        "Portfolio Target Type"
     ]
 
     horizon = row[
@@ -1515,16 +1919,17 @@ def get_horizon_score(row):
     target_type = (
         str(
             row[
-                "Target Type"
+                "Portfolio Target Type"
             ]
         )
         .upper()
         .strip()
     )
 
-    horizon = horizon_key(
-        row
-    )
+    if "Horizon Key" in row.index:
+        horizon = row["Horizon Key"]
+    else:
+        horizon = horizon_key(row)
 
     minimum, maximum = (
         ACTIVE_HORIZON_SCORE_RANGES[
@@ -1587,6 +1992,16 @@ for model_number, (_, model_row) in enumerate(
         ]
     )
 
+    analysis_type = str(
+        model_row[
+            "Analysis Type"
+        ]
+    )
+
+    research_split = RESEARCH_SPLITS[
+        analysis_type
+    ]
+
     features = target_features[
         target
     ]
@@ -1606,16 +2021,24 @@ for model_number, (_, model_row) in enumerate(
     target_train_df = load_target_period(
         target=target,
         features=features,
-        start_date=fit_start,
-        end_date=fit_end,
+        start_date=research_split[
+            "fit_start"
+        ],
+        end_date=research_split[
+            "fit_end"
+        ],
         split="TRAIN",
     )
 
     target_validation_df = load_target_period(
         target=target,
         features=features,
-        start_date=validation_start,
-        end_date=validation_end,
+        start_date=research_split[
+            "validation_start"
+        ],
+        end_date=research_split[
+            "validation_end"
+        ],
         split="BACKTEST",
     )
 
@@ -1647,6 +2070,14 @@ for model_number, (_, model_row) in enumerate(
         ]
         .copy()
     )
+
+    target_predictions[
+        "Analysis Type"
+    ] = model_row[
+        "Analysis Type"
+    ]
+
+    target_predictions["Portfolio Target Type"] = model_row["Portfolio Target Type"]
 
     prediction_parts.append(
         target_predictions
@@ -1705,7 +2136,6 @@ logger.info(
     ),
 )
 
-
 predictions_df[
     "Horizon Key"
 ] = predictions_df.apply(
@@ -1715,11 +2145,75 @@ predictions_df[
 
 
 predictions_df[
+    "Signal"
+] = (
+    pd.to_numeric(
+        predictions_df[
+            "Signal"
+        ],
+        errors="coerce",
+    )
+    .replace(
+        [
+            np.inf,
+            -np.inf,
+        ],
+        np.nan,
+    )
+    .fillna(
+        0.0
+    )
+)
+
+predictions_df = predictions_df.dropna()
+
+
+predictions_df[
+    "Adjusted Signal"
+] = (
+    predictions_df[
+        "Signal"
+    ]
+    * predictions_df[
+        "Quality Score"
+    ]
+)
+
+predictions_df = predictions_df[['Date', 'Ticker', 'Return', 'Portfolio Target Type', 'Horizon Key', 'Adjusted Signal']]
+
+predictions_df = (
+    predictions_df
+    .groupby(
+        [
+            "Date",
+            "Ticker",
+            "Portfolio Target Type",
+            "Horizon Key"
+        ],
+        as_index=False,
+    )
+    .agg(
+        Return=(
+            "Return",
+            "first",
+        ),
+        Signal=(
+            "Adjusted Signal",
+            "mean",
+        ),
+    )
+)
+
+pass
+
+predictions_df[
     "Horizon Score"
 ] = predictions_df.apply(
     get_horizon_score,
     axis=1,
 )
+
+initial_predictions_df = predictions_df
 
 
 logger.info(
@@ -1742,9 +2236,7 @@ def backtest_quality(df):
         max_weight=0.30,
         concentration_penalty=0.10,
         trading_fee=0.00,
-    )[
-        "results"
-    ]
+    )
 
     delta_return = (
         results[
@@ -1896,7 +2388,7 @@ for (
         frozen_df.loc[
             (
                 frozen_df[
-                    "Target Type"
+                    "Portfolio Target Type"
                 ]
                 == target_type
             )
@@ -1955,7 +2447,7 @@ for (
             test_df.loc[
                 (
                     test_df[
-                        "Target Type"
+                        "Portfolio Target Type"
                     ]
                     == target_type
                 )
@@ -1985,32 +2477,11 @@ for (
             )
         )
 
-        std_quality = float(
-            np.std(
-                qualities
-            )
-        )
-
-
-        if abs(
-            mean_quality
-        ) < 1e-12:
-
-            cv = np.inf
-
-        else:
-
-            cv = (
-                std_quality
-                / abs(
-                    mean_quality
-                )
-            )
-
+        range_quality = float(np.max(qualities)) - float(np.min(qualities))
 
         sensitivity_results.append(
             {
-                "Target Type":
+                "Portfolio Target Type":
                     target_type,
 
                 "Horizon":
@@ -2019,26 +2490,22 @@ for (
                 "Mean BQ":
                     mean_quality,
 
-                "Std BQ":
-                    std_quality,
-
-                "CV":
-                    cv,
+                "Range BQ":
+                    range_quality,
 
                 "Frozen":
-                    cv < 0.05,
+                    range_quality < 0.003,
             }
         )
 
 
         logger.info(
-            "Sensitivity result | %s %s | mean=%.6f | std=%.6f | cv=%.4f | frozen=%s",
+            "Sensitivity result | %s %s | Mean BQ=%.6f | Range BQ=%.6f | Frozen=%s",
             target_type,
             horizon,
             mean_quality,
-            std_quality,
-            cv,
-            cv < 0.05,
+            range_quality,
+            range_quality < 0.003,
         )
 
 
@@ -2046,7 +2513,7 @@ for (
         # Freeze Insensitive Parameters
         ####################################
 
-        if cv < 0.05:
+        if range_quality < 0.003:
 
             index = min(
                 FROZEN_INDEX,
@@ -2271,7 +2738,7 @@ def random_screen(
                         test_df.loc[
                             (
                                 test_df[
-                                    "Target Type"
+                                    "Portfolio Target Type"
                                 ]
                                 == config_type
                             )
@@ -2293,7 +2760,7 @@ def random_screen(
                 test_df.loc[
                     (
                         test_df[
-                            "Target Type"
+                            "Portfolio Target Type"
                         ]
                         == target_type
                     )
@@ -2391,7 +2858,7 @@ def random_screen(
                 win_rates[
                     index
                 ]
-                >= threshold
+                > threshold
                 or index
                 == best_index
             )
@@ -2428,7 +2895,7 @@ def random_screen(
 
         results.append(
             {
-                "Target Type":
+                "Portfolio Target Type":
                     target_type,
 
                 "Horizon":
@@ -2706,7 +3173,7 @@ for (
         test_df.loc[
             (
                 test_df[
-                    "Target Type"
+                    "Portfolio Target Type"
                 ]
                 == target_type
             )

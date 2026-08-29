@@ -1763,6 +1763,418 @@ def create_models_and_predictions(
     }
 
 
+def portfolio_returns_from_scores(
+    dataframe,
+    rebalance_every=1,
+    max_weight = 0.30,
+    concentration_penalty = 0.10,
+    trading_fee = 0.00
+):
+
+    ########################################
+    # Validate
+    ########################################
+
+    required_columns = {
+        "Date",
+        "Ticker",
+        "Return",
+        "Stock_Score",
+    }
+
+    missing_columns = (
+        required_columns
+        .difference(
+            dataframe.columns
+        )
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Missing columns: "
+            + ", ".join(
+                sorted(
+                    missing_columns
+                )
+            )
+        )
+
+    if rebalance_every < 1:
+        raise ValueError(
+            "rebalance_every must be at least 1."
+        )
+
+
+    ########################################
+    # Clean
+    ########################################
+
+    data = dataframe[
+        [
+            "Date",
+            "Ticker",
+            "Return",
+            "Stock_Score",
+        ]
+    ].copy()
+
+    data[
+        "Date"
+    ] = pd.to_datetime(
+        data[
+            "Date"
+        ],
+        errors="coerce",
+    )
+
+    data[
+        "Return"
+    ] = (
+        pd.to_numeric(
+            data[
+                "Return"
+            ],
+            errors="coerce",
+        )
+        .replace(
+            [
+                np.inf,
+                -np.inf,
+            ],
+            np.nan,
+        )
+    )
+
+    data[
+        "Stock_Score"
+    ] = (
+        pd.to_numeric(
+            data[
+                "Stock_Score"
+            ],
+            errors="coerce",
+        )
+        .replace(
+            [
+                np.inf,
+                -np.inf,
+            ],
+            np.nan,
+        )
+        .fillna(
+            0.0
+        )
+        .clip(
+            lower=0.0
+        )
+    )
+
+    data = (
+        data
+        .dropna(
+            subset=[
+                "Date",
+                "Ticker",
+                "Return",
+            ]
+        )
+        .sort_values(
+            [
+                "Date",
+                "Ticker",
+            ]
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+
+    ########################################
+    # Weight Calculation
+    ########################################
+
+    def calculate_weights(
+        daily_data,
+    ):
+
+        scores = (
+            daily_data
+            .set_index(
+                "Ticker"
+            )[
+                "Stock_Score"
+            ]
+        )
+
+        active = (
+            scores > 0
+        )
+
+        if not active.any():
+            return pd.Series(
+                dtype=float
+            )
+
+
+        score_weights = (
+            scores
+            / scores.sum()
+        )
+
+        equal_weights = (
+            active.astype(float)
+            / active.sum()
+        )
+
+
+        # Blend mostly score-proportional
+        # weights with 10% equal weighting.
+        desired_weights = (
+            (
+                1.0
+                - concentration_penalty
+            )
+            * score_weights
+            +
+            concentration_penalty
+            * equal_weights
+        )
+
+
+        ####################################
+        # Enforce Maximum Weight
+        ####################################
+
+        final_weights = pd.Series(
+            0.0,
+            index=desired_weights.index,
+        )
+
+        remaining_tickers = list(
+            desired_weights.index[
+                active
+            ]
+        )
+
+        remaining_capital = min(
+            1.0,
+            len(
+                remaining_tickers
+            )
+            * max_weight,
+        )
+
+
+        while (
+            remaining_tickers
+            and remaining_capital > 1e-12
+        ):
+
+            remaining_scores = (
+                desired_weights.loc[
+                    remaining_tickers
+                ]
+            )
+
+            proposed = (
+                remaining_scores
+                / remaining_scores.sum()
+                * remaining_capital
+            )
+
+            over_cap = (
+                proposed > max_weight
+            )
+
+            if not over_cap.any():
+
+                final_weights.loc[
+                    remaining_tickers
+                ] = proposed
+
+                break
+
+
+            capped_tickers = list(
+                proposed.index[
+                    over_cap
+                ]
+            )
+
+            final_weights.loc[
+                capped_tickers
+            ] = max_weight
+
+            remaining_capital -= (
+                max_weight
+                * len(
+                    capped_tickers
+                )
+            )
+
+            remaining_tickers = [
+                ticker
+                for ticker in remaining_tickers
+                if ticker not in capped_tickers
+            ]
+
+
+        return final_weights[
+            final_weights > 0
+        ]
+
+
+    ########################################
+    # Run Through Dates
+    ########################################
+
+    dates = (
+        data[
+            "Date"
+        ]
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+
+    current_weights = pd.Series(
+        dtype=float
+    )
+
+    previous_weights = pd.Series(
+        dtype=float
+    )
+
+    return_records = []
+
+
+    for date_number, date in enumerate(
+        dates
+    ):
+
+        daily_data = (
+            data[
+                data[
+                    "Date"
+                ].eq(
+                    date
+                )
+            ]
+            .copy()
+        )
+
+
+        ####################################
+        # Rebalance Only Every X Dates
+        ####################################
+
+        if (
+            date_number
+            % rebalance_every
+            == 0
+        ):
+
+            current_weights = (
+                calculate_weights(
+                    daily_data
+                )
+            )
+
+
+            all_tickers = (
+                previous_weights.index
+                .union(
+                    current_weights.index
+                )
+            )
+
+            old_weights = (
+                previous_weights
+                .reindex(
+                    all_tickers,
+                    fill_value=0.0,
+                )
+            )
+
+            new_weights = (
+                current_weights
+                .reindex(
+                    all_tickers,
+                    fill_value=0.0,
+                )
+            )
+
+            turnover = (
+                0.5
+                * (
+                    new_weights
+                    - old_weights
+                )
+                .abs()
+                .sum()
+            )
+
+            previous_weights = (
+                current_weights.copy()
+            )
+
+        else:
+
+            # Continue using the portfolio
+            # selected on the last rebalance.
+            turnover = 0.0
+
+
+        ####################################
+        # Apply Held Weights
+        ####################################
+
+        daily_returns = (
+            daily_data
+            .set_index(
+                "Ticker"
+            )[
+                "Return"
+            ]
+        )
+
+        aligned_returns = (
+            daily_returns
+            .reindex(
+                current_weights.index
+            )
+            .fillna(
+                0.0
+            )
+        )
+
+        gross_return = float(
+            (
+                current_weights
+                * aligned_returns
+            ).sum()
+        )
+
+        net_return = (
+            gross_return
+            - turnover
+            * trading_fee
+        )
+
+
+        return_records.append(
+            {
+                "Date": date,
+                "Return": net_return,
+            }
+        )
+
+
+    return pd.DataFrame(
+        return_records
+    )
+
 def run_portfolio_backtest_from_predictions(
     predictions_df,
     type_values=None,
@@ -1781,9 +2193,8 @@ def run_portfolio_backtest_from_predictions(
     ``Horizon Score`` column in predictions_df and call again.
     """
     required = {
-        "Date", "Ticker", "Close", "Return", "Target",
-        "Prediction", "Signal", "Target Type", "Horizon",
-        "Horizon Score", "Quality Score",
+        "Date", "Ticker", "Return", "Signal",
+        "Horizon Score"
     }
     missing = required.difference(predictions_df.columns)
     if missing:
@@ -1803,17 +2214,11 @@ def run_portfolio_backtest_from_predictions(
     predictions["Horizon Score"] = pd.to_numeric(
         predictions["Horizon Score"], errors="coerce"
     ).clip(0.0, 1.0)
-    predictions["Quality Score"] = pd.to_numeric(
-        predictions["Quality Score"], errors="coerce"
-    ).clip(0.0, 1.0)
 
-    predictions["Model Weight"] = (
-        predictions["Horizon Score"]
-        * predictions["Quality Score"]
-    )
+
     predictions["Contribution"] = (
         predictions["Signal"]
-        * predictions["Model Weight"]
+        * predictions["Horizon Score"]
     )
 
     type_value_map = DEFAULT_TYPE_VALUES.copy()
@@ -1825,163 +2230,128 @@ def run_portfolio_backtest_from_predictions(
 
     valid = predictions["Signal"].notna()
 
-    type_scores = (
+    predictions = (
         predictions.loc[valid]
-        .groupby(["Date", "Ticker", "Target Type"], as_index=False)
+        .groupby(["Date", "Ticker", "Portfolio Target Type"], as_index=False)
         .agg(
             Contribution_Sum=("Contribution", "sum"),
-            Model_Weight_Sum=("Model Weight", "sum"),
+            Return=("Return", "first")
         )
     )
 
-    type_scores["Type Score"] = np.where(
-        type_scores["Model_Weight_Sum"] > 0,
-        type_scores["Contribution_Sum"]
-        / type_scores["Model_Weight_Sum"],
-        np.nan,
+    BASE_TYPE_SCORES = pd.Series(
+        {
+            "ALPHA": 0.55,
+            "RELATIVE_ALPHA": 0.55,
+            "RISK_ADJUSTED_ALPHA": 0.60,
+            "CROSS_SECTION_ALPHA": 0.60,
+            "CROSS_SECTION_DOWNSIDE": 0.55,
+
+            "DIRECTION": 0.55,
+            "DIRECTION_MULTICLASS": 0.50,
+            "ALPHA_BINARY": 0.50,
+            "BARRIER_ALPHA": 0.50,
+
+            "VOLATILITY": 0.55,
+            "ABSOLUTE_MOVE": 0.50,
+            "UPSIDE_VOLATILITY": 0.45,
+            "DOWNSIDE_VOLATILITY": 0.55,
+            "VOLATILITY_ASYMMETRY": 0.50,
+            "VOLATILITY_EVENT": 0.50,
+
+            "DOWNSIDE": 0.60,
+            "TAIL_RISK": 0.60,
+            "TAIL_EVENT": 0.55,
+            "UPSIDE_RISK": 0.45,
+            "UPSIDE_EVENT": 0.45,
+
+            "UPSIDE_EXCURSION": 0.50,
+            "DOWNSIDE_EXCURSION": 0.55,
+            "TIME_TO_UPSIDE_EXCURSION": 0.45,
+            "TIME_TO_DOWNSIDE_EXCURSION": 0.50,
+
+            "RECOVERY": 0.50,
+            "REVERSAL": 0.50,
+            "REGIME": 0.55,
+            "CORRELATION": 0.50,
+            "COVARIANCE": 0.50,
+
+            "LIQUIDITY": 0.50,
+            "EXECUTION": 0.50,
+            "MARKET_IMPACT": 0.50,
+        },
+        name="Base Type Score",
+        dtype=float,
     )
 
-    type_scores["Type Value"] = (
-        type_scores["Target Type"]
-        .astype(str)
-        .str.upper()
-        .map(type_value_map)
-        .fillna(1.0)
-    )
-    type_scores["Type Contribution"] = (
-        type_scores["Type Score"] * type_scores["Type Value"]
-    )
-    type_scores["Absolute Type Value"] = type_scores["Type Value"].abs()
 
-    overall = (
-        type_scores.dropna(subset=["Type Score"])
+    BASE_TYPE_SCORES.index.name = (
+        "Portfolio Target Type"
+    )
+
+
+    predictions = predictions.merge(
+        BASE_TYPE_SCORES,
+        how="left",
+        left_on="Portfolio Target Type",
+        right_index=True,
+        validate="many_to_one",
+    )
+
+    predictions["Type Score"] = predictions["Contribution_Sum"] * predictions["Base Type Score"]
+
+    predictions = (
+        predictions.loc[valid]
         .groupby(["Date", "Ticker"], as_index=False)
         .agg(
-            Overall_Numerator=("Type Contribution", "sum"),
-            Overall_Denominator=("Absolute Type Value", "sum"),
+            Stock_Score=("Type Score", "sum"),
+            Return=("Return", "first")
         )
     )
-    overall["Overall Score"] = np.where(
-        overall["Overall_Denominator"] > 0,
-        overall["Overall_Numerator"]
-        / overall["Overall_Denominator"],
-        np.nan,
+
+    backtest = portfolio_returns_from_scores(predictions)
+
+    # Calculate cumulative strategy returns
+    backtest["Strategy Return"] = (
+        1 + backtest["Return"]
+    ).cumprod()
+
+
+    strategy_return = (
+        backtest["Strategy Return"].iloc[-1] - 1
     )
 
-    market_rows = (
-        predictions[["Date", "Ticker", "Close", "Return"]]
-        .drop_duplicates(subset=["Date", "Ticker"])
-        .sort_values(["Date", "Ticker"])
-        .reset_index(drop=True)
-    )
-    scored_rows = market_rows.merge(
-        overall[["Date", "Ticker", "Overall Score"]],
-        on=["Date", "Ticker"],
-        how="left",
+    strategy_volatility = (
+        backtest["Strategy Return"].std()
+        * np.sqrt(252)
     )
 
-    backtest_dates = (
-        scored_rows["Date"].drop_duplicates().sort_values().reset_index(drop=True)
-    )
-    test_tickers = sorted(scored_rows["Ticker"].dropna().unique().tolist())
-    rebalance_dates = backtest_dates.iloc[::rebalance_every]
 
-    historical_weights = []
-    skipped_rebalances = 0
-
-    for date in rebalance_dates:
-        date_predictions = scored_rows.loc[
-            scored_rows["Date"] == date,
-            ["Ticker", "Date", "Overall Score"],
-        ].dropna(subset=["Overall Score"])
-
-        if len(date_predictions) < 2 or max_weight * len(date_predictions) < 1:
-            skipped_rebalances += 1
-            continue
-
-        portfolio = _construct_portfolio(
-            date_predictions=date_predictions,
-            max_weight=max_weight,
-            concentration_penalty=concentration_penalty,
-        )
-        historical_weights.extend(
-            portfolio[["Date", "Ticker", "Recommended Weight"]]
-            .to_dict("records")
-        )
-
-    if not historical_weights:
-        raise ValueError("No valid rebalance portfolio could be created.")
-
-    rebalance_weights = (
-        pd.DataFrame(historical_weights)
-        .pivot(index="Date", columns="Ticker", values="Recommended Weight")
-        .reindex(columns=test_tickers)
-        .fillna(0.0)
-    )
-    weights_df = (
-        rebalance_weights.reindex(backtest_dates).ffill().fillna(0.0)
+    # Sharpe Ratio
+    strategy_sharpe = (
+        strategy_return
+        / strategy_volatility
     )
 
-    # Recommendation made at t is used from t+1 onward.
-    held_weights = weights_df.shift(1).fillna(0.0)
-
-    returns_df = (
-        scored_rows.pivot(index="Date", columns="Ticker", values="Return")
-        .reindex(index=backtest_dates, columns=test_tickers)
+    backtest["Strategy Peak"] = (
+        backtest["Strategy Return"]
+        .cummax()
     )
 
-    strategy_contributions = held_weights * returns_df.fillna(0.0)
-    turnover = held_weights.diff().abs().sum(axis=1).fillna(0.0)
-    trading_cost = turnover * float(trading_fee)
-    strategy_return = strategy_contributions.sum(axis=1) - trading_cost
-
-    active = held_weights.sum(axis=1) > 0
-    if not active.any():
-        raise ValueError("No portfolio became active.")
-
-    strategy_start = active[active].index[0]
-
-    backtest = pd.DataFrame(index=backtest_dates)
-    backtest["Strategy_Return"] = strategy_return
-    backtest = backtest.loc[strategy_start:].copy()
-    backtest["Strategy"] = (1.0 + backtest["Strategy_Return"]).cumprod()
-    backtest["Strategy_Peak"] = backtest["Strategy"].cummax()
-    backtest["Strategy_Drawdown"] = (
-        backtest["Strategy"] / backtest["Strategy_Peak"] - 1.0
+    backtest["Strategy Drawdown"] = (
+        (backtest["Strategy Return"] - backtest["Strategy Peak"])
+        / backtest["Strategy Peak"]
     )
-    backtest["Turnover"] = turnover.reindex(backtest.index).fillna(0.0)
-    backtest["Trading_Cost"] = trading_cost.reindex(backtest.index).fillna(0.0)
 
-    strategy_total_return = float(backtest["Strategy"].iloc[-1] - 1.0)
-    average_drawdown = float(backtest["Strategy_Drawdown"].mean())
-    maximum_drawdown = float(backtest["Strategy_Drawdown"].min())
+    strategy_average_drawdown = backtest["Strategy Drawdown"].mean()
 
-    returns = backtest["Strategy_Return"].dropna()
-    return_std = float(returns.std())
-    sharpe_ratio = (
-        float(returns.mean() / return_std * np.sqrt(annualisation))
-        if return_std > 0
-        else np.nan
+    strategy_max_drawdown = (
+        backtest["Strategy Drawdown"].min()
     )
 
     return {
-        "results": {
-            "Strategy Return": strategy_total_return,
-            "Average Drawdown": average_drawdown,
-            "Max Drawdown": maximum_drawdown,
-            "Sharpe Ratio": sharpe_ratio,
-            "Rebalance Days": int(rebalance_every),
-            "Max Weight": float(max_weight),
-            "Concentration Penalty": float(concentration_penalty),
-            "Trading Fee": float(trading_fee),
-            "Targets": int(predictions["Target"].nunique()),
-            "Skipped Rebalances": int(skipped_rebalances),
-        },
-        "backtest": backtest,
-        "scored_rows": scored_rows,
-        "target_contributions": predictions,
-        "type_scores": type_scores,
-        "rebalance_weights": rebalance_weights,
-        "weights": weights_df,
-        "held_weights": held_weights,
+            "Strategy Return": strategy_return,
+            "Average Drawdown": strategy_average_drawdown,
+            "Max Drawdown": strategy_max_drawdown,
+            "Sharpe Ratio": strategy_sharpe
     }

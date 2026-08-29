@@ -37,6 +37,8 @@ MAX_CONTINUOUS_RANK_IC_STD = 0.10
 MAX_BINARY_ROC_AUC_STD = 0.07
 MAX_MULTICLASS_MACRO_F1_STD = 0.10
 
+MODELS_TO_DO = []
+
 logger.info("Starting validation model fitting")
 logger.info("Stock type: %s", STOCK_TYPE)
 
@@ -161,6 +163,7 @@ logger.info("Found %d validation database tables", len(table_names))
 
 for i in range(len(table_names)):
     table_names[i] = table_names[i].rstrip("__search")
+    table_names[i] = table_names[i].rstrip("__folds")
 
 table_targets = list(set(table_names))
 
@@ -640,7 +643,7 @@ LIGHTGBM_PARAMS = {
     "num_leaves": [
          7,
          15,
-        31,
+        #31,
         # 63,
         # 127,
         # 255,
@@ -648,7 +651,7 @@ LIGHTGBM_PARAMS = {
 
     "max_depth": [
         -1,
-        # 3,
+         3,
         # 5,
         # 8,
         # 12,
@@ -679,13 +682,13 @@ LIGHTGBM_PARAMS = {
     ],
 
     "reg_alpha": [
-        0,
+        #0,
          1e-5,
-        # 1e-4,
+         1e-4,
         # 1e-3,
          1e-2,
-         0.1,
-        # 1,
+        # 0.1,
+         1,
         # 10,
     ],
 
@@ -910,12 +913,12 @@ CONTINUOUS_MODELS = [
     #    "params": RANDOM_FOREST_PARAMS,
     #},
 
-    #{
-    #    "name": "XGBoost",
-    #    "function": "fit_xgboost_regressor",
-    #    "scaled": False,
-    #    "params": XGBOOST_PARAMS,
-    #},
+    {
+        "name": "XGBoost",
+        "function": "fit_xgboost_regressor",
+        "scaled": False,
+        "params": XGBOOST_PARAMS,
+    },
 
     {
         "name": "LightGBM",
@@ -1037,51 +1040,51 @@ BINARY_MODELS = [
         },
     },
 
-    {
-        "name": "L2 Logistic Regression",
-        "function": "fit_l2_logistic_regression",
-        "scaled": True,
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "L2 Logistic Regression",
+    #    "function": "fit_l2_logistic_regression",
+    #    "scaled": True,
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
-    {
-        "name": "L1 Logistic Regression",
-        "function": "fit_l1_logistic_regression",
-        "scaled": True,
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "L1 Logistic Regression",
+    #    "function": "fit_l1_logistic_regression",
+    #    "scaled": True,
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
-    {
-        "name": "Elastic Net Logistic Regression",
-        "function": "fit_elastic_net_logistic_regression",
-        "scaled": True,
-        "params": {
-            "C": C_VALUES,
-            "l1_ratio": L1_RATIOS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "Elastic Net Logistic Regression",
+    #    "function": "fit_elastic_net_logistic_regression",
+    #    "scaled": True,
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "l1_ratio": L1_RATIOS,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
 
     ########################################
     # Tree Models
     ########################################
 
-    {
-       "name": "Hist Gradient Boosting",
-       "function": "fit_hist_gradient_boosting_classifier",
-       "scaled": False,
-       "params": {
-           **HIST_GRADIENT_PARAMS,
-           "class_weight": CLASS_WEIGHTS,
-       },
-    },
+    #{
+    #   "name": "Hist Gradient Boosting",
+    #   "function": "fit_hist_gradient_boosting_classifier",
+    #   "scaled": False,
+    #   "params": {
+    #       **HIST_GRADIENT_PARAMS,
+    #       "class_weight": CLASS_WEIGHTS,
+    #   },
+    #},
 
 
     ########################################
@@ -1089,23 +1092,23 @@ BINARY_MODELS = [
     # Uncomment later
     ########################################
 
-    {
-        "name": "Gradient Boosting",
-        "function": "fit_gradient_boosting_classifier",
-        "scaled": False,
-        "params": GRADIENT_BOOSTING_PARAMS,
-    },
+    #{
+    #    "name": "Gradient Boosting",
+    #    "function": "fit_gradient_boosting_classifier",
+    #    "scaled": False,
+    #    "params": GRADIENT_BOOSTING_PARAMS,
+    #},
 
 
-    {
-        "name": "Random Forest",
-        "function": "fit_random_forest_classifier",
-        "scaled": False,
-        "params": {
-            **RANDOM_FOREST_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "Random Forest",
+    #    "function": "fit_random_forest_classifier",
+    #    "scaled": False,
+    #    "params": {
+    #        **RANDOM_FOREST_PARAMS,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
     {
        "name": "XGBoost",
@@ -1133,40 +1136,40 @@ BINARY_MODELS = [
     # Uncomment later
     ########################################
 
-    {
-        "name": "SVM Linear",
-        "function": "fit_svm_classifier",
-        "scaled": True,
-        "params": {
+    #{
+    #    "name": "SVM Linear",
+    #    "function": "fit_svm_classifier",
+    #    "scaled": True,
+    #    "params": {
 
-            "kernel": ["linear"],
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #        "kernel": ["linear"],
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
-    {
-        "name": "SVM RBF",
-        "function": "fit_svm_classifier",
-        "scaled": True,
-        "params": {
+    #{
+    #    "name": "SVM RBF",
+    #    "function": "fit_svm_classifier",
+    #    "scaled": True,
+    #    "params": {
 
-            "kernel": ["rbf"],
-            "C": C_VALUES,
+    #        "kernel": ["rbf"],
+    #        "C": C_VALUES,
 
-            "gamma": [
-                "scale",
-                # "auto",
-                # 1e-4,
-                # 1e-3,
-                # 1e-2,
-                # 0.1,
-                # 1,
-            ],
+    #        "gamma": [
+    #            "scale",
+    #            # "auto",
+    #            # 1e-4,
+    #            # 1e-3,
+    #            # 1e-2,
+    #            # 0.1,
+    #            # 1,
+    #        ],
 
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
     ########################################
     # kNN
@@ -1214,12 +1217,12 @@ BINARY_MODELS = [
     # Uncomment much later
     ########################################
 
-    {
-        "name": "MLP",
-        "function": "fit_mlp_classifier",
-        "scaled": True,
-        "params": MLP_PARAMS,
-    },
+    #{
+    #    "name": "MLP",
+    #    "function": "fit_mlp_classifier",
+    #    "scaled": True,
+    #    "params": MLP_PARAMS,
+    #},
 ]
 
 
@@ -1251,36 +1254,36 @@ MULTICLASS_MODELS = [
         },
     },
 
-    {
-        "name": "L2 Multinomial Logistic Regression",
-        "function": "fit_l2_multinomial_logistic_regression",
-        "scaled": True,
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "L2 Multinomial Logistic Regression",
+    #    "function": "fit_l2_multinomial_logistic_regression",
+    #    "scaled": True,
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
-    {
-        "name": "L1 Multinomial Logistic Regression",
-        "function": "fit_l1_multinomial_logistic_regression",
-        "scaled": True,
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "L1 Multinomial Logistic Regression",
+    #    "function": "fit_l1_multinomial_logistic_regression",
+    #    "scaled": True,
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
-    {
-        "name": "Elastic Net Multinomial Logistic Regression",
-        "function": "fit_elastic_net_multinomial_logistic_regression",
-        "scaled": True,
-        "params": {
-            "C": C_VALUES,
-            "l1_ratio": L1_RATIOS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "Elastic Net Multinomial Logistic Regression",
+    #    "function": "fit_elastic_net_multinomial_logistic_regression",
+    #    "scaled": True,
+    #    "params": {
+    #        "C": C_VALUES,
+    #        "l1_ratio": L1_RATIOS,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
 
     ########################################
@@ -1355,15 +1358,15 @@ MULTICLASS_MODELS = [
     # Tree Models
     ########################################
 
-    {
-       "name": "Hist Gradient Boosting",
-       "function": "fit_hist_gradient_boosting_multiclass",
-       "scaled": False,
-       "params": {
-           **HIST_GRADIENT_PARAMS,
-           "class_weight": CLASS_WEIGHTS,
-       },
-    },
+    #{
+    #   "name": "Hist Gradient Boosting",
+    #   "function": "fit_hist_gradient_boosting_multiclass",
+    #   "scaled": False,
+    #   "params": {
+    #       **HIST_GRADIENT_PARAMS,
+    #       "class_weight": CLASS_WEIGHTS,
+    #   },
+    #},
 
 
     ########################################
@@ -1371,23 +1374,23 @@ MULTICLASS_MODELS = [
     # Uncomment later
     ########################################
 
-    {
-        "name": "Gradient Boosting",
-        "function": "fit_gradient_boosting_multiclass",
-        "scaled": False,
-        "params": GRADIENT_BOOSTING_PARAMS,
-    },
+    #{
+    #    "name": "Gradient Boosting",
+    #    "function": "fit_gradient_boosting_multiclass",
+    #    "scaled": False,
+    #    "params": GRADIENT_BOOSTING_PARAMS,
+    #},
 
 
-    {
-        "name": "Random Forest",
-        "function": "fit_random_forest_multiclass",
-        "scaled": False,
-        "params": {
-            **RANDOM_FOREST_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #{
+    #    "name": "Random Forest",
+    #    "function": "fit_random_forest_multiclass",
+    #    "scaled": False,
+    #    "params": {
+    #        **RANDOM_FOREST_PARAMS,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
     {
         "name": "XGBoost",
@@ -1415,40 +1418,40 @@ MULTICLASS_MODELS = [
     # Uncomment later
     ########################################
 
-    {
-        "name": "SVM Linear",
-        "function": "fit_svm_multiclass",
-        "scaled": True,
-        "params": {
+    #{
+    #    "name": "SVM Linear",
+    #    "function": "fit_svm_multiclass",
+    #    "scaled": True,
+    #    "params": {
 
-            "kernel": ["linear"],
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #        "kernel": ["linear"],
+    #        "C": C_VALUES,
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
-    {
-        "name": "SVM RBF",
-        "function": "fit_svm_multiclass",
-        "scaled": True,
-        "params": {
+    #{
+    #    "name": "SVM RBF",
+    #    "function": "fit_svm_multiclass",
+    #    "scaled": True,
+    #    "params": {
 
-            "kernel": ["rbf"],
-            "C": C_VALUES,
+    #        "kernel": ["rbf"],
+    #        "C": C_VALUES,
 
-            "gamma": [
-                "scale",
-                # "auto",
-                # 1e-4,
-                # 1e-3,
-                # 1e-2,
-                # 0.1,
-                # 1,
-            ],
+    #        "gamma": [
+    #            "scale",
+    #            # "auto",
+    #            # 1e-4,
+    #            # 1e-3,
+    #            # 1e-2,
+    #            # 0.1,
+    #            # 1,
+    #        ],
 
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
+    #        "class_weight": CLASS_WEIGHTS,
+    #    },
+    #},
 
 
     ########################################
@@ -1456,12 +1459,12 @@ MULTICLASS_MODELS = [
     # Uncomment much later
     ########################################
 
-    {
-        "name": "MLP",
-        "function": "fit_mlp_multiclass",
-        "scaled": True,
-        "params": MLP_PARAMS,
-    },
+    #{
+    #    "name": "MLP",
+    #    "function": "fit_mlp_multiclass",
+    #    "scaled": True,
+    #    "params": MLP_PARAMS,
+    #},
 
 
     ########################################
@@ -1499,6 +1502,20 @@ MULTICLASS_MODELS = [
     # },
 ]
 
+
+testing_recommendations = input("Would you like to test model recommendations? (Y for YES, anything else for NO)\n")
+if testing_recommendations.lower() in ['y','yes']:
+    testing_recommendations = True
+
+    try:
+        N_RECOMMENDATIONS = int(input("How many models per targets? (Default 3)\n"))
+        if N_RECOMMENDATIONS <= 0:
+            N_RECOMMENDATIONS = 3
+    except ValueError:
+        N_RECOMMENDATIONS = 3
+
+else:
+    testing_recommendations = False
 
 from itertools import product
 
@@ -1601,7 +1618,7 @@ def run_single_fold(
     return results
 
 
-def walk_forward(models_to_do,df,features,target,purge_days,type,validation_window=20):
+def walk_forward(models_to_do,df,features,target,purge_days,type, previous_results, no_table, validation_window=20):
 
     logger.info(
         "%s | Starting walk-forward validation | %d models | validation window: %d | purge days: %d",
@@ -1611,25 +1628,95 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
         purge_days
     )
 
-    ########################################################
-    # LOAD PREVIOUS RESULTS ONCE
-    ########################################################
+    pruning_rules = {}
 
-    try:
 
-        with sqlite3.connect(VALIDATION_DATABASE_PATH) as conn:
+    if not no_table:
 
-            previous_results = pd.read_sql_query(
-                f'''
-                SELECT *
-                FROM "{target}__search"
-                ''',
-                conn
+        pd.set_option(
+            "display.max_columns",
+            None
+        )
+
+        target_type = (
+            previous_results[
+                "Target Type"
+            ].iloc[0]
+        )
+
+        logger.info(
+            "Generating pruning rules | "
+            "Target type: %s | "
+            "Previous configurations: %d",
+            target_type,
+            len(previous_results)
+        )
+
+        pruning_rules = prune_models(
+            previous_results,
+            target_type
+        )
+
+
+    if any(
+        rules
+        for rules in pruning_rules.values()
+    ):
+
+        rule_count = sum(
+            len(rules)
+            for rules in pruning_rules.values()
+        )
+
+        logger.info(
+            "Pruning rules generated | "
+            "%d rules across %d model families",
+            rule_count,
+            sum(
+                bool(rules)
+                for rules in pruning_rules.values()
             )
+        )
 
-    except Exception:
 
-        previous_results = pd.DataFrame()
+        models_before_pruning = len(
+            models_to_do
+        )
+
+
+        models_to_do = [
+            model
+            for model in models_to_do
+            if not should_prune_model(
+                model,
+                pruning_rules
+            )
+        ]
+
+
+        models_removed = (
+            models_before_pruning
+            - len(models_to_do)
+        )
+
+
+        logger.info(
+            "Model configuration pruning complete | "
+            "Before: %d | "
+            "Removed: %d | "
+            "Remaining: %d",
+            models_before_pruning,
+            models_removed,
+            len(models_to_do)
+        )
+
+
+    else:
+
+        logger.info(
+            "No statistically supported "
+            "pruning rules found"
+        )
 
 
     original_previous_results = previous_results.copy()
@@ -1665,6 +1752,23 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
     validation_results = []
 
     all_validation_results = []
+
+    try:
+
+        with sqlite3.connect(VALIDATION_DATABASE_PATH) as conn:
+
+            fold_results = pd.read_sql_query(
+                f'''
+                SELECT *
+                FROM "{target}__folds"
+                ''',
+                conn
+            )
+
+    except Exception:
+
+        fold_results = pd.DataFrame()
+
 
     fold = 1
     start = 0
@@ -1791,18 +1895,37 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
             fold
         )
 
-        if fold in [3,5,7,11]:
+        if fold in [3,5,7,9,11,14]:
 
-            models_to_do, previous_results = prune(
+            PRUNING_STAGES = {
+                3:  (0.95, 20000),
+                5:  (0.9, 5000),
+                7:  (0.8, 1000),
+                9: (0.65, 300),
+                11: (0.5, 70),
+                14: (0.5, 15)
+            }
+
+            models_to_do = prune(
                 models_to_do,
                 validation_results,
-                previous_results,
+                fold_results,
                 fold,
                 target,
-                type
+                type,
+                PRUNING_STAGES[fold][0],
+                PRUNING_STAGES[fold][1]
             )
 
-            validation_results = []
+            validation_results = [
+                result
+                for result in validation_results
+                if any(
+                    result["Model"] == model["name"]
+                    and result["Parameters"] == model["params"]
+                    for model in models_to_do
+                )
+            ]
 
             if not models_to_do:
                 start = len(validation_dates)
@@ -1818,6 +1941,17 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
         new_results["Parameters"]
         .apply(lambda x: str(x))
     )
+
+    with sqlite3.connect(
+            VALIDATION_DATABASE_PATH
+        ) as conn:
+
+            new_results.to_sql(
+                f"{target}__folds",
+                conn,
+                if_exists="append",
+                index=False
+            )    
     
     metric_columns = [
         column
@@ -1825,8 +1959,7 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
             include="number"
         ).columns
         if column not in [
-            "Fold",
-            "Fold Count"
+            "Fold"
         ]
     ]
     
@@ -1845,12 +1978,12 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
             }
         )
     )
-    
+
     new_results.columns = [
         (
             f"{column} {stat.title()}"
             if column != "Fold"
-            else "Fold Count"
+            else "Fold"
         )
         for column, stat in new_results.columns
     ]
@@ -1859,19 +1992,22 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
 
     new_results["Target"] = target
     new_results["Target Type"] = type
-    
-    common_columns = original_previous_results.columns.intersection(
-        new_results.columns
-    )
 
-    new_summary = pd.concat(
-        [
-            original_previous_results[common_columns],
-            new_results[common_columns]    
-        ],
-        ignore_index=True
-    )
+    if not(original_previous_results.empty):
+        common_columns = original_previous_results.columns.intersection(
+            new_results.columns
+        )
 
+        new_summary = pd.concat(
+                [
+                    original_previous_results[common_columns],
+                    new_results[common_columns]    
+                ],
+                ignore_index=True
+            )
+        
+    else:
+        new_summary = new_results
 
     return new_summary
     
@@ -1879,10 +2015,12 @@ def walk_forward(models_to_do,df,features,target,purge_days,type,validation_wind
 def prune(
     models_to_do,
     validation_results,
-    previous_results,
+    fold_results,
     fold,
     target,
-    type
+    type,
+    multiplier,
+    maximum_left
 ):
     
     original_models_to_do = {
@@ -1908,8 +2046,7 @@ def prune(
             include="number"
         ).columns
         if column not in [
-            "Fold",
-            "Fold Count"
+            "Fold"
         ]
     ]
 
@@ -1921,33 +2058,30 @@ def prune(
         .agg(
             {
                 **{
-                    column: ["mean", "std"]
+                    column: "mean"
                     for column in metric_columns
                 },
                 "Fold": "nunique"
             }
         )
+        .rename(
+            columns={
+                **{
+                    column: f"{column} Mean"
+                    for column in metric_columns
+                }
+            }
+        )
+        .reset_index()
     )
 
-    current_results.columns = [
-        (
-            f"{column} {stat.title()}"
-            if column != "Fold"
-            else "Fold Count"
-        )
-        for column, stat in current_results.columns
-    ]
-
-    current_results = current_results.reset_index()
-
-    current_results["Fold Count"] = fold
 
 
     ########################################################
     # PREVIOUS RESULTS + CURRENT NEW RESULTS
     ########################################################
 
-    if previous_results.empty:
+    if fold_results.empty:
 
         combined_results = (
             current_results.copy()
@@ -1955,15 +2089,49 @@ def prune(
 
     else:
 
+        fold_results = fold_results[
+            fold_results["Fold"] <= fold
+        ].copy()
+
+        fold_results["Parameters"] = (
+            fold_results["Parameters"]
+            .apply(lambda x: str(x))
+        )
+
+        fold_results = (
+            fold_results
+            .groupby(
+                ["Model", "Parameters"]
+            )
+            .agg(
+                {
+                    **{
+                        column: "mean"
+                        for column in metric_columns
+                    },
+                    "Fold": "nunique"
+                }
+            )
+            .rename(
+                columns={
+                    **{
+                        column: f"{column} Mean"
+                        for column in metric_columns
+                    }
+                }
+            )
+            .reset_index()
+        )
+
         common_columns = (
-            previous_results.columns.intersection(
+            fold_results.columns.intersection(
                 current_results.columns
             )
         )
 
         combined_results = pd.concat(
             [
-                previous_results[
+                fold_results[
                     common_columns
                 ],
 
@@ -1975,93 +2143,52 @@ def prune(
         )
 
 
-    ########################################################
-    # CHOOSE CORRECT METRIC
-    ########################################################
-
-    UNCERTAINTY_PENALTY = 1.0
-
-
     if type == "continuous":
 
         if target.startswith("Future Return Rank"):
 
             mean_column = "Rank IC Mean"
-            std_column = "Rank IC Std"
             higher_is_better = True
 
         else:
 
             mean_column = "NRMSE Mean"
-            std_column = "NRMSE Std"
             higher_is_better = False
 
 
     elif type == "binary":
 
         mean_column = "ROC AUC Mean"
-        std_column = "ROC AUC Std"
         higher_is_better = True
 
 
     elif type == "multiclass":
 
         mean_column = "Macro F1 Mean"
-        std_column = "Macro F1 Std"
         higher_is_better = True
-
-
-    ########################################################
-    # UNCERTAINTY-ADJUSTED SCORE
-    ########################################################
-
-    standard_error = (
-        combined_results[std_column]
-        / np.sqrt(
-            combined_results["Fold Count"]
-        )
-    )
 
 
     if higher_is_better:
 
-        combined_results["Sort Score"] = (
-            combined_results[mean_column]
-            + UNCERTAINTY_PENALTY
-            * standard_error
+        combined_results = combined_results.sort_values(
+            mean_column,
+            ascending=False
         )
-
-        ascending = False
 
     else:
 
-        combined_results["Sort Score"] = (
-            combined_results[mean_column]
-            - UNCERTAINTY_PENALTY
-            * standard_error
+        combined_results = combined_results.sort_values(
+            mean_column,
+            ascending=True
         )
-
-        ascending = True
-
-
-    sort_column = "Sort Score"
-
-
-    ########################################################
-    # RANK ALL KNOWN CONFIGURATIONS
-    ########################################################
-
-    combined_results = combined_results.sort_values(
-        sort_column,
-        ascending=ascending
-    )
-
 
     keep_count = int(
         np.ceil(
-            len(combined_results) * 0.7
+            len(combined_results) * multiplier
         )
     )
+
+    keep_count = min(keep_count, maximum_left)
 
 
     better_results = combined_results.head(
@@ -2109,7 +2236,7 @@ def prune(
         )
     ].copy()
 
-    return new_models_to_do, better_results
+    return new_models_to_do
 
 
 def rank_validation_results(
@@ -2123,29 +2250,14 @@ def rank_validation_results(
 
     if target_type == "continuous":
 
-        if target.startswith(
-            "Future Return Rank"
-        ):
-
-            sorting_rules = [
-                ("Rank IC Mean", False),
-                ("Rank IC Std", True),
-                ("NRMSE Mean", True),
-                ("RMSE Mean", True),
-                ("MAE Mean", True),
-            ]
-
-        else:
-
-            sorting_rules = [
-                ("NRMSE Mean", True),
-                ("NRMSE Std", True),
-                ("RMSE Mean", True),
-                ("MAE Mean", True),
-                ("R2 Mean", False),
-                ("Rank IC Mean", False),
-            ]
-
+        sorting_rules = [
+            ("Rank IC Mean", False),
+            ("Rank IC Std", True),
+            ("NRMSE Mean", True),
+            ("RMSE Mean", True),
+            ("MAE Mean", True),
+            ("R2 Mean", False)
+        ]
 
     elif target_type == "binary":
 
@@ -2236,7 +2348,7 @@ def add_testing_eligibility(
 
 
     full_validation = (
-        results["Fold Count"]
+        results["Fold"]
         >= min_folds
     )
 
@@ -2629,11 +2741,19 @@ def main():
 
     logger.info("Beginning target processing")
 
-    for target in targets:
+    for target_number, target in enumerate(
+        targets,
+        start=1
+    ):
 
         new_target = False
 
-        logger.info("Target: %s | Starting", target)
+        logger.info(
+            "[%d/%d] Target: %s | Starting",
+            target_number,
+            len(targets),
+            target
+        )
 
         if target in USED_CONTINUOUS_MODELS.keys():
 
@@ -2682,7 +2802,7 @@ def main():
                 len(MODELS_TO_DO)
             )
 
-            if not(MODELS_TO_DO):
+            if not(MODELS_TO_DO) and not(testing_recommendations):
 
                 logger.info(
                     "Target: %s | No new model configurations to test | Skipping",
@@ -2690,6 +2810,31 @@ def main():
                 )
 
                 continue
+
+        ########################################################
+        # LOAD PREVIOUS RESULTS ONCE
+        ########################################################
+
+        try:
+
+            with sqlite3.connect(VALIDATION_DATABASE_PATH) as conn:
+
+                previous_results = pd.read_sql_query(
+                    f'''
+                    SELECT *
+                    FROM "{target}__search"
+                    ''',
+                    conn
+                )
+
+                no_table = False
+
+        except Exception:
+
+            previous_results = pd.DataFrame()
+
+            no_table = True
+
 
         features = selected_features[target]
 
@@ -2742,25 +2887,46 @@ def main():
                 _type
             )
 
-        logger.info(
-            "Target: %s | Ready to test %d configurations",
-            target,
-            len(MODELS_TO_DO)
-        )
+        if new_target:
+            if _type == "continuous":
+                MODELS_TO_DO = ALL_CONTINOUS_MODELS
+            elif _type == "binary":
+                MODELS_TO_DO = ALL_BINARY_MODELS
+            elif _type == "multiclass":
+                MODELS_TO_DO = ALL_MULTICLASS_MODELS
+
+        if testing_recommendations and not(no_table):
+            recommended_models = recommend_models_to_fit(
+                previous_results,
+                _type,
+                n=N_RECOMMENDATIONS
+            )
+
+            if not(MODELS_TO_DO):
+                MODELS_TO_DO = recommended_models
+            else:
+                MODELS_TO_DO.extend(recommended_models)
+
+        
+        if (MODELS_TO_DO):
+            logger.info(
+                "Target: %s | Ready to test %d configurations",
+                target,
+                len(MODELS_TO_DO)
+            )
+        else:
+            logger.info(
+                "Target: %s | No configurations to test",
+                target
+            )
+
+            continue
 
         purge_days = target_purge_days(
             target
         )
 
-        if _type == "continuous":
-            model_source = CONTINUOUS_MODELS
-
-        elif _type == "binary":
-            model_source = BINARY_MODELS
-
-        elif _type == "multiclass":
-            model_source = MULTICLASS_MODELS
-
+        model_source = full_model_source(_type)
 
         model_lookup = {
             model["name"]: model
@@ -2799,6 +2965,10 @@ def main():
 
                 type=_type,
 
+                previous_results=previous_results, 
+
+                no_table=no_table,
+
                 validation_window=20
             )
         )
@@ -2812,7 +2982,7 @@ def main():
         new_summary = add_testing_eligibility(
             new_summary,
             _type,
-            12
+            15
         )
 
         with sqlite3.connect(
@@ -2840,15 +3010,10 @@ def main():
                 if_exists="replace",
                 index=False
             )
+ 
 
 
-        
-
-        
-
-
-
-if (not MULTICLASS_MODELS) and (not BINARY_MODELS) and (not CONTINUOUS_MODELS):
+if (not MULTICLASS_MODELS) and (not BINARY_MODELS) and (not CONTINUOUS_MODELS) and not(testing_recommendations):
 
     logger.info(
         "No new continuous, binary, or multiclass model families remain to be tested"
@@ -2874,3 +3039,5 @@ else:
     logger.info("At least one model type has configurations remaining to test")
 
     main()
+    
+

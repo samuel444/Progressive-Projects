@@ -129,6 +129,91 @@ def testing_eligible_mask(series):
     )
 
 
+def model_ranking_rules(target_type):
+
+    if target_type == "continuous":
+        return [
+            ("Rank IC Mean", False),
+            ("Rank IC Std", True),
+            ("NRMSE Mean", True),
+            ("RMSE Mean", True),
+            ("MAE Mean", True),
+            ("R2 Mean", False),
+        ]
+
+    if target_type == "binary":
+        return [
+            ("ROC AUC Mean", False),
+            ("ROC AUC Std", True),
+            ("PR AUC Mean", False),
+            ("F1 Mean", False),
+            ("Log Loss Mean", True),
+        ]
+
+    if target_type == "multiclass":
+        return [
+            ("Macro F1 Mean", False),
+            ("Macro F1 Std", True),
+            ("Balanced Accuracy Mean", False),
+            ("Log Loss Mean", True),
+        ]
+
+    raise ValueError(
+        f"Unknown target type: {target_type}"
+    )
+
+
+def target_type_from_name(target):
+
+    if (
+        target.startswith("Three Class Direction")
+        or target.startswith("Barrier")
+        or target.startswith("Volatility Barrier")
+    ):
+        return "multiclass"
+
+    if (
+        target.startswith("Future Direction")
+        or target.startswith("Future Return Above")
+        or target.startswith("Top 20 Percent Future Return")
+        or target.startswith("Top 25 Percent Future Return")
+    ):
+        return "binary"
+
+    return "continuous"
+
+
+def rank_eligible_models(
+    leaderboard,
+    target_type
+):
+
+    available_rules = [
+        (column, ascending)
+        for column, ascending in model_ranking_rules(
+            target_type
+        )
+        if column in leaderboard.columns
+    ]
+
+    if not available_rules:
+        return leaderboard.copy()
+
+    ranked = leaderboard.sort_values(
+        by=[column for column, _ in available_rules],
+        ascending=[ascending for _, ascending in available_rules],
+        na_position="last",
+        kind="stable"
+    ).copy()
+
+    ranked["Test Selection Rank"] = np.arange(
+        1,
+        len(ranked) + 1
+    )
+
+    return ranked
+
+
 def load_test_eligible_models(
     selected_features,
     validation_database_path
@@ -155,61 +240,28 @@ def load_test_eligible_models(
 
         for target in selected_features.keys():
 
+            # Exact normal target-table match.
             if target not in table_names:
                 continue
 
-            table_info = pd.read_sql_query(
-                f"PRAGMA table_info({quote_sql_identifier(target)})",
-                validation_connection
-            )
-
-            table_columns = set(
-                table_info["name"].tolist()
-            )
-
-            if "Testing Eligible" not in table_columns:
-                continue
-
             leaderboard = pd.read_sql_query(
-                f"SELECT * FROM {quote_sql_identifier(target)}",
+                f"""
+                SELECT *
+                FROM {quote_sql_identifier(target)}
+                """,
                 validation_connection
             )
 
+            # No eligible validation results for this target.
             if leaderboard.empty:
                 continue
 
-            eligible = leaderboard[
-                testing_eligible_mask(
-                    leaderboard[
-                        "Testing Eligible"
-                    ]
+            eligible = rank_eligible_models(
+                leaderboard=leaderboard,
+                target_type=target_type_from_name(
+                    target
                 )
-            ].copy()
-
-            if eligible.empty:
-                continue
-
-            if "Rank" in eligible.columns:
-                eligible = eligible.sort_values(
-                    "Rank",
-                    ascending=True,
-                    na_position="last"
-                )
-
-            duplicate_columns = [
-                column
-                for column in [
-                    "Model",
-                    "Parameters"
-                ]
-                if column in eligible.columns
-            ]
-
-            if len(duplicate_columns) > 0:
-                eligible = eligible.drop_duplicates(
-                    subset=duplicate_columns,
-                    keep="first"
-                )
+            )
 
             eligible_by_target[target] = (
                 eligible.reset_index(
@@ -228,6 +280,7 @@ eligible_models_by_target = (
         )
     )
 )
+
 
 targets = [
     target
@@ -283,1304 +336,7 @@ logger.info(
     len(SOURCE_TABLE_COLUMNS)
 )
 
-RIDGE_ALPHAS = [
-    1e-5,
-    3e-5,
-    1e-4,
-    3e-4,
-    1e-3,
-    3e-3,
-    1e-2,
-    3e-2,
-    0.1,
-    0.3,
-    1,
-    3,
-    10,
-    30,
-    100,
-    300,
-    1000,
-    3000,
-    10000,
-]
-
-
-SPARSE_ALPHAS = [
-    1e-8,
-    3e-8,
-    1e-7,
-    3e-7,
-    1e-6,
-    3e-6,
-    1e-5,
-    3e-5,
-    1e-4,
-    3e-4,
-    1e-3,
-    3e-3,
-    1e-2,
-    3e-2,
-    0.1,
-    0.3,
-    1,
-    3,
-    10,
-]
-
-
-C_VALUES = [
-    1e-5,
-    3e-5,
-    1e-4,
-    3e-4,
-    1e-3,
-    3e-3,
-    1e-2,
-    3e-2,
-    0.1,
-    0.3,
-    1,
-    3,
-    10,
-    30,
-    100,
-    300,
-    1000,
-]
-
-
-L1_RATIOS = [
-    0.01,
-    0.05,
-    0.10,
-    0.25,
-    0.50,
-    0.75,
-    0.90,
-    0.95,
-    0.99,
-]
-
-
-LEARNING_RATES = [
-    0.005,
-    0.01,
-    0.03,
-    0.05,
-    0.10,
-    0.20,
-]
-
-
-CLASS_WEIGHTS = [
-    None,
-    "balanced",
-]
-
-
-########################################
-# Hist Gradient Boosting
-########################################
-
-HIST_GRADIENT_PARAMS = {
-
-    "learning_rate": LEARNING_RATES,
-
-    "max_iter": [
-        100,
-        200,
-        300,
-        600,
-        1000,
-        1500,
-    ],
-
-    "max_leaf_nodes": [
-        7,
-        15,
-        31,
-        63,
-        127,
-    ],
-
-    "max_depth": [
-        None,
-        3,
-        5,
-        7,
-        10,
-    ],
-
-    "min_samples_leaf": [
-        5,
-        10,
-        20,
-        50,
-        100,
-        200,
-    ],
-
-    "l2_regularization": [
-        0,
-        1e-4,
-        1e-3,
-        1e-2,
-        0.1,
-        1,
-        10,
-        100,
-    ],
-}
-
-
-########################################
-# Gradient Boosting
-########################################
-
-GRADIENT_BOOSTING_PARAMS = {
-
-    "learning_rate": LEARNING_RATES,
-
-    "n_estimators": [
-        100,
-        200,
-        300,
-        600,
-        1000,
-    ],
-
-    "max_depth": [
-        2,
-        3,
-        4,
-        5,
-        8,
-    ],
-
-    "min_samples_leaf": [
-        5,
-        10,
-        20,
-        50,
-        100,
-    ],
-
-    "subsample": [
-        0.5,
-        0.6,
-        0.8,
-        1.0,
-    ],
-
-    "max_features": [
-        None,
-        "sqrt",
-        0.3,
-        0.5,
-        0.8,
-    ],
-}
-
-
-########################################
-# Random Forest
-########################################
-
-RANDOM_FOREST_PARAMS = {
-
-    "n_estimators": [
-        200,
-        500,
-        1000,
-        1500,
-    ],
-
-    "max_depth": [
-        None,
-        5,
-        10,
-        15,
-        20,
-        30,
-    ],
-
-    "min_samples_leaf": [
-        1,
-        2,
-        5,
-        10,
-        20,
-        50,
-        100,
-    ],
-
-    "min_samples_split": [
-        2,
-        5,
-        10,
-        20,
-        50,
-    ],
-
-    "max_features": [
-        "sqrt",
-        0.2,
-        0.3,
-        0.5,
-        0.75,
-        1.0,
-    ],
-
-    "bootstrap": [
-        True,
-        False,
-    ],
-}
-
-
-########################################
-# XGBoost
-########################################
-
-XGBOOST_PARAMS = {
-
-    "n_estimators": [
-        200,
-        300,
-        500,
-        750,
-        1000,
-        1500,
-    ],
-
-    "learning_rate": LEARNING_RATES,
-
-    "max_depth": [
-        2,
-        3,
-        4,
-        5,
-        7,
-        10,
-    ],
-
-    "min_child_weight": [
-        1,
-        2,
-        3,
-        5,
-        10,
-        20,
-        50,
-    ],
-
-    "subsample": [
-        0.5,
-        0.6,
-        0.8,
-        1.0,
-    ],
-
-    "colsample_bytree": [
-        0.4,
-        0.5,
-        0.75,
-        1.0,
-    ],
-
-    "gamma": [
-        0,
-        0.001,
-        0.01,
-        0.1,
-        0.5,
-        1,
-        5,
-    ],
-
-    "reg_alpha": [
-        0,
-        1e-5,
-        1e-4,
-        1e-3,
-        1e-2,
-        0.1,
-        1,
-        10,
-    ],
-
-    "reg_lambda": [
-        0,
-        0.01,
-        0.1,
-        1,
-        10,
-        100,
-    ],
-}
-
-
-########################################
-# LightGBM
-########################################
-
-LIGHTGBM_PARAMS = {
-
-    "n_estimators": [
-        200,
-        300,
-        500,
-        750,
-        1000,
-        1500,
-    ],
-
-    "learning_rate": LEARNING_RATES,
-
-    "num_leaves": [
-        7,
-        15,
-        31,
-        63,
-        127,
-        255,
-    ],
-
-    "max_depth": [
-        -1,
-        3,
-        5,
-        8,
-        12,
-        16,
-    ],
-
-    "min_child_samples": [
-        5,
-        10,
-        20,
-        50,
-        100,
-        200,
-    ],
-
-    "subsample": [
-        0.5,
-        0.6,
-        0.8,
-        1.0,
-    ],
-
-    "colsample_bytree": [
-        0.4,
-        0.5,
-        0.75,
-        1.0,
-    ],
-
-    "reg_alpha": [
-        0,
-        1e-5,
-        1e-4,
-        1e-3,
-        1e-2,
-        0.1,
-        1,
-        10,
-    ],
-
-    "reg_lambda": [
-        0,
-        0.01,
-        0.1,
-        1,
-        10,
-        100,
-    ],
-}
-
-
-########################################
-# MLP
-#
-# Currently unused because MLP models
-# themselves are commented out below.
-########################################
-
-MLP_PARAMS = {
-
-    "hidden_layer_sizes": [
-        (32,),
-        (64,),
-        (128,),
-        (256,),
-        (64, 32),
-        (128, 64),
-        (256, 128),
-        (128, 64, 32),
-        (256, 128, 64),
-    ],
-
-    "activation": [
-        "relu",
-        "tanh",
-    ],
-
-    "alpha": [
-        1e-7,
-        1e-6,
-        1e-5,
-        1e-4,
-        1e-3,
-        1e-2,
-        0.1,
-    ],
-
-    "learning_rate_init": [
-        1e-5,
-        3e-5,
-        1e-4,
-        3e-4,
-        1e-3,
-        3e-3,
-        1e-2,
-    ],
-
-    "batch_size": [
-        32,
-        64,
-        128,
-        256,
-        512,
-        "auto",
-    ],
-}
-
-
-########################################
-# kNN
-########################################
-
-KNN_PARAMS = {
-
-    "n_neighbors": [
-        3,
-        5,
-        10,
-        20,
-        40,
-        80,
-        150,
-        250,
-    ],
-
-    "weights": [
-        "uniform",
-        "distance",
-    ],
-
-    "p": [
-        1,
-        2,
-    ],
-}
-
-
-########################################
-########################################
-# CONTINUOUS MODELS
-########################################
-########################################
-
-CONTINUOUS_MODELS = [
-
-    ########################################
-    # Baselines / Linear
-    ########################################
-
-    {
-        "name": "Mean Baseline",
-        "function": "fit_mean_baseline",
-        "scaled": False,
-        "search": "grid",
-        "params": {},
-    },
-
-    {
-        "name": "OLS",
-        "function": "fit_ols",
-        "scaled": True,
-        "search": "grid",
-        "params": {},
-    },
-
-    {
-        "name": "Ridge",
-        "function": "fit_ridge",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "alpha": RIDGE_ALPHAS,
-        },
-    },
-
-    {
-        "name": "Lasso",
-        "function": "fit_lasso",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "alpha": SPARSE_ALPHAS,
-        },
-    },
-
-    {
-        "name": "Elastic Net",
-        "function": "fit_elastic_net",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 20,
-        # Later:
-        "n_iter": 75,
-        "params": {
-            "alpha": SPARSE_ALPHAS,
-            "l1_ratio": L1_RATIOS,
-        },
-    },
-
-
-    ########################################
-    # Huber
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "Huber",
-        "function": "fit_huber",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 60,
-        "params": {
-    
-            "epsilon": [
-                1.05,
-                1.15,
-                1.25,
-                1.35,
-                1.50,
-                1.75,
-                2.00,
-                2.50,
-            ],
-    
-            "alpha": [
-                0,
-                1e-7,
-                1e-6,
-                1e-5,
-                1e-4,
-                1e-3,
-                1e-2,
-                0.1,
-                1,
-            ],
-        },
-    },
-
-
-    ########################################
-    # Main Tree Models
-    ########################################
-
-    {
-       "name": "Hist Gradient Boosting",
-       "function": "fit_hist_gradient_boosting_regressor",
-       "scaled": False,
-       "search": "random",
-       "n_iter": 20,
-       # Later:
-       "n_iter": 75,
-       "params": HIST_GRADIENT_PARAMS,
-    },
-
-
-    ########################################
-    # Standard Gradient Boosting
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "Gradient Boosting",
-        "function": "fit_gradient_boosting_regressor",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 60,
-        "params": GRADIENT_BOOSTING_PARAMS,
-    },
-
-
-    {
-        "name": "Random Forest",
-        "function": "fit_random_forest_regressor",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 20,
-        # Later:
-        "n_iter": 75,
-        "params": RANDOM_FOREST_PARAMS,
-    },
-
-    {
-        "name": "XGBoost",
-        "function": "fit_xgboost_regressor",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": XGBOOST_PARAMS,
-    },
-
-    {
-        "name": "LightGBM",
-        "function": "fit_lightgbm_regressor",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": LIGHTGBM_PARAMS,
-    },
-
-
-    ########################################
-    # SVR
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "SVR",
-        "function": "fit_svr",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 75,
-        "params": [
-    
-            {
-                "kernel": ["linear"],
-                "C": C_VALUES,
-    
-                "epsilon": [
-                    1e-4,
-                    1e-3,
-                    1e-2,
-                    0.05,
-                    0.1,
-                    0.25,
-                    0.5,
-                ],
-            },
-    
-            {
-                "kernel": ["rbf"],
-                "C": C_VALUES,
-    
-                "epsilon": [
-                    1e-4,
-                    1e-3,
-                    1e-2,
-                    0.05,
-                    0.1,
-                    0.25,
-                    0.5,
-                ],
-    
-                "gamma": [
-                    "scale",
-                    "auto",
-                    1e-4,
-                    1e-3,
-                    1e-2,
-                    0.1,
-                    1,
-                ],
-            },
-        ],
-    },
-
-
-    ########################################
-    # kNN
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "kNN",
-        "function": "fit_knn_regressor",
-        "scaled": True,
-        "search": "grid",
-        "params": KNN_PARAMS,
-    },
-
-
-    ########################################
-    # MLP
-    # Uncomment much later
-    ########################################
-
-    {
-        "name": "MLP",
-        "function": "fit_mlp_regressor",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 75,
-        "params": MLP_PARAMS,
-    },
-]
-
-
-########################################
-########################################
-# BINARY MODELS
-########################################
-########################################
-
-BINARY_MODELS = [
-
-    ########################################
-    # Baseline / Logistic Models
-    ########################################
-
-    {
-        "name": "Binary Baseline",
-        "function": "fit_binary_baseline",
-        "scaled": False,
-        "search": "grid",
-        "params": {},
-    },
-
-    {
-        "name": "Logistic Regression",
-        "function": "fit_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "L2 Logistic Regression",
-        "function": "fit_l2_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "L1 Logistic Regression",
-        "function": "fit_l1_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "Elastic Net Logistic Regression",
-        "function": "fit_elastic_net_logistic_regression",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": {
-            "C": C_VALUES,
-            "l1_ratio": L1_RATIOS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-
-    ########################################
-    # Tree Models
-    ########################################
-
-    {
-       "name": "Hist Gradient Boosting",
-       "function": "fit_hist_gradient_boosting_classifier",
-       "scaled": False,
-       "search": "random",
-       "n_iter": 20,
-       # Later:
-       "n_iter": 75,
-       "params": {
-           **HIST_GRADIENT_PARAMS,
-           "class_weight": CLASS_WEIGHTS,
-       },
-    },
-
-
-    ########################################
-    # Standard Gradient Boosting
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "Gradient Boosting",
-        "function": "fit_gradient_boosting_classifier",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 60,
-        "params": GRADIENT_BOOSTING_PARAMS,
-    },
-
-
-    {
-        "name": "Random Forest",
-        "function": "fit_random_forest_classifier",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 20,
-        # Later:
-        "n_iter": 75,
-        "params": {
-            **RANDOM_FOREST_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-       "name": "XGBoost",
-       "function": "fit_xgboost_classifier",
-       "scaled": False,
-       "search": "random",
-       "n_iter": 25,
-       # Later:
-       "n_iter": 100,
-       "params": {
-           **XGBOOST_PARAMS,
-           "class_weight": CLASS_WEIGHTS,
-       },
-    },
-
-    {
-        "name": "LightGBM",
-        "function": "fit_lightgbm_classifier",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": {
-            **LIGHTGBM_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-
-    ########################################
-    # SVM
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "SVM",
-        "function": "fit_svm_classifier",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 75,
-        "params": [
-    
-            {
-                "kernel": ["linear"],
-                "C": C_VALUES,
-                "class_weight": CLASS_WEIGHTS,
-            },
-    
-            {
-                "kernel": ["rbf"],
-                "C": C_VALUES,
-    
-                "gamma": [
-                    "scale",
-                    "auto",
-                    1e-4,
-                    1e-3,
-                    1e-2,
-                    0.1,
-                    1,
-                ],
-    
-                "class_weight": CLASS_WEIGHTS,
-            },
-        ],
-    },
-
-
-    ########################################
-    # kNN
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "kNN",
-        "function": "fit_knn_classifier",
-        "scaled": True,
-        "search": "grid",
-        "params": KNN_PARAMS,
-    },
-
-
-    ########################################
-    # Naive Bayes
-    #
-    # Cheap enough that I would leave this
-    # active initially.
-    ########################################
-
-    {
-        "name": "Naive Bayes",
-        "function": "fit_naive_bayes",
-        "scaled": False,
-        "search": "grid",
-        "params": {
-
-            "var_smoothing": [
-                1e-13,
-                1e-12,
-                1e-11,
-                1e-10,
-                1e-9,
-                1e-8,
-                1e-7,
-                1e-6,
-                1e-5,
-            ],
-        },
-    },
-
-
-    ########################################
-    # MLP
-    # Uncomment much later
-    ########################################
-
-    {
-        "name": "MLP",
-        "function": "fit_mlp_classifier",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 75,
-        "params": MLP_PARAMS,
-    },
-]
-
-
-########################################
-########################################
-# MULTICLASS MODELS
-########################################
-########################################
-
-MULTICLASS_MODELS = [
-
-    ########################################
-    # Baseline / Logistic Models
-    ########################################
-
-    {
-        "name": "Multiclass Baseline",
-        "function": "fit_multiclass_baseline",
-        "scaled": False,
-        "search": "grid",
-        "params": {},
-    },
-
-    {
-        "name": "Multinomial Logistic Regression",
-        "function": "fit_multinomial_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "L2 Multinomial Logistic Regression",
-        "function": "fit_l2_multinomial_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "L1 Multinomial Logistic Regression",
-        "function": "fit_l1_multinomial_logistic_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-            "C": C_VALUES,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "Elastic Net Multinomial Logistic Regression",
-        "function": "fit_elastic_net_multinomial_logistic_regression",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": {
-            "C": C_VALUES,
-            "l1_ratio": L1_RATIOS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-
-    ########################################
-    # LDA
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "LDA",
-        "function": "fit_lda",
-        "scaled": True,
-        "search": "grid",
-        "params": [
-    
-            {
-                "solver": ["svd"],
-            },
-    
-            {
-                "solver": [
-                    "lsqr",
-                    "eigen",
-                ],
-    
-                "shrinkage": [
-                    None,
-                    "auto",
-                    0.05,
-                    0.1,
-                    0.25,
-                    0.5,
-                    0.75,
-                    0.9,
-                    0.95,
-                ],
-            },
-        ],
-    },
-
-
-    ########################################
-    # QDA
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "QDA",
-        "function": "fit_qda",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-    
-            "reg_param": [
-                0,
-                0.0001,
-                0.001,
-                0.01,
-                0.05,
-                0.1,
-                0.25,
-                0.5,
-                0.75,
-                1.0,
-            ],
-        },
-    },
-
-
-    ########################################
-    # Tree Models
-    ########################################
-
-    {
-       "name": "Hist Gradient Boosting",
-       "function": "fit_hist_gradient_boosting_multiclass",
-       "scaled": False,
-       "search": "random",
-       "n_iter": 20,
-       # Later:
-       "n_iter": 75,
-       "params": {
-           **HIST_GRADIENT_PARAMS,
-           "class_weight": CLASS_WEIGHTS,
-       },
-    },
-
-
-    ########################################
-    # Standard Gradient Boosting
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "Gradient Boosting",
-        "function": "fit_gradient_boosting_multiclass",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 60,
-        "params": GRADIENT_BOOSTING_PARAMS,
-    },
-
-
-    {
-        "name": "Random Forest",
-        "function": "fit_random_forest_multiclass",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 20,
-        # Later:
-        "n_iter": 75,
-        "params": {
-            **RANDOM_FOREST_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "XGBoost",
-        "function": "fit_xgboost_multiclass",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": {
-            **XGBOOST_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-    {
-        "name": "LightGBM",
-        "function": "fit_lightgbm_multiclass",
-        "scaled": False,
-        "search": "random",
-        "n_iter": 25,
-        # Later:
-        "n_iter": 100,
-        "params": {
-            **LIGHTGBM_PARAMS,
-            "class_weight": CLASS_WEIGHTS,
-        },
-    },
-
-
-    ########################################
-    # SVM
-    # Uncomment later
-    ########################################
-
-    {
-        "name": "SVM",
-        "function": "fit_svm_multiclass",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 75,
-        "params": [
-    
-            {
-                "kernel": ["linear"],
-                "C": C_VALUES,
-                "class_weight": CLASS_WEIGHTS,
-            },
-    
-            {
-                "kernel": ["rbf"],
-                "C": C_VALUES,
-    
-                "gamma": [
-                    "scale",
-                    "auto",
-                    1e-4,
-                    1e-3,
-                    1e-2,
-                    0.1,
-                    1,
-                ],
-    
-                "class_weight": CLASS_WEIGHTS,
-            },
-        ],
-    },
-
-
-    ########################################
-    # MLP
-    # Uncomment much later
-    ########################################
-
-    {
-        "name": "MLP",
-        "function": "fit_mlp_multiclass",
-        "scaled": True,
-        "search": "random",
-        "n_iter": 75,
-        "params": MLP_PARAMS,
-    },
-
-
-    ########################################
-    # Ordinal Regression
-    #
-    # Relatively cheap, so keep active.
-    ########################################
-
-    {
-        "name": "Ordinal Regression",
-        "function": "fit_ordinal_regression",
-        "scaled": True,
-        "search": "grid",
-        "params": {
-
-            "alpha": [
-                1e-5,
-                3e-5,
-                1e-4,
-                3e-4,
-                1e-3,
-                3e-3,
-                1e-2,
-                3e-2,
-                0.1,
-                0.3,
-                1,
-                3,
-                10,
-                30,
-                100,
-            ],
-        },
-    },
-]
+# Model definitions are provided by full_model_source(target_type).
 
 def get_model_function(function_name):
 
@@ -1963,53 +719,17 @@ def clean_binary_target(y, target):
     return y
 
 def final_target_type(target):
-
-    ########################################
-    # Multiclass
-    ########################################
-
-    if (
-        target.startswith("Three Class Direction")
-        or target.startswith("Barrier")
-        or target.startswith("Volatility Barrier")
-    ):
-        return "multiclass"
-
-
-    ########################################
-    # Binary
-    ########################################
-
-    if (
-        target.startswith("Future Direction")
-        or target.startswith("Future Return Above")
-        or target.startswith("Top 20 Percent Future Return")
-        or target.startswith("Top 25 Percent Future Return")
-    ):
-        return "binary"
-
-
-    ########################################
-    # Continuous
-    ########################################
-
-    return "continuous"
+    return target_type_from_name(
+        target
+    )
 
 
 def get_models(target_type):
-
-    if target_type == "continuous":
-        return CONTINUOUS_MODELS
-
-    if target_type == "binary":
-        return BINARY_MODELS
-
-    if target_type == "multiclass":
-        return MULTICLASS_MODELS
-
-    raise ValueError(
-        f"Unknown target type: {target_type}"
+    model_source = full_model_source(
+        target_type
     )
+
+    return model_source
 
 
 def clean_final_result(
@@ -2094,11 +814,9 @@ def clean_final_result(
 def predictability_score(row):
 
     if row["Target Type"] == "continuous":
-        rank_ic = abs(row["Rank IC"])
-        r2 = max(row["R2"], 0)
-
-        # Ranking is especially important for financial signals
-        return 0.65 * rank_ic + 0.35 * r2
+        # Continuous predictions are consumed as cross-sectional ranks.
+        # Do not use abs(): a negative IC ranks stocks in the wrong order.
+        return max(row["Rank IC"], 0)
 
     elif row["Target Type"] == "binary":
         # Convert AUC so 0.5 = no predictive value
@@ -2197,10 +915,12 @@ def eligible_metric_columns(
 
     if target_type == "continuous":
         wanted = [
-            "R2 Mean",
             "Rank IC Mean",
+            "Rank IC Std",
+            "NRMSE Mean",
             "RMSE Mean",
-            "Rank IC Std"
+            "MAE Mean",
+            "R2 Mean"
         ]
 
     elif target_type == "binary":
@@ -2229,41 +949,30 @@ def eligible_metric_columns(
     ]
 
 
-def choose_test_eligible_model(
+def selected_model_from_row(
+    row
+):
+
+    model_name = row[
+        "Model"
+    ]
+
+    parameters = parse_selected_parameters(
+        row[
+            "Parameters"
+        ]
+    )
+
+    return (
+        model_name,
+        parameters
+    )
+
+
+def display_test_eligible_models(
     target,
     eligible_models
 ):
-
-    if eligible_models.empty:
-        raise ValueError(
-            f"{target} has no test-eligible models."
-        )
-
-    if len(eligible_models) == 1:
-
-        selected = eligible_models.iloc[0]
-
-        model_name = selected[
-            "Model"
-        ]
-
-        parameters = parse_selected_parameters(
-            selected[
-                "Parameters"
-            ]
-        )
-
-        logger.info(
-            "%s | One test-eligible model | Selected automatically: %s | %s",
-            target,
-            model_name,
-            parameters
-        )
-
-        return (
-            model_name,
-            parameters
-        )
 
     target_type = final_target_type(
         target
@@ -2275,9 +984,12 @@ def choose_test_eligible_model(
     )
 
     print("\n" + "=" * 100)
+
     print(
-        f"{target} | {len(eligible_models)} TEST-ELIGIBLE MODELS"
+        f"{target} | "
+        f"{len(eligible_models)} TEST-ELIGIBLE MODELS"
     )
+
     print("=" * 100)
 
     for option_number, (_, row) in enumerate(
@@ -2287,17 +999,18 @@ def choose_test_eligible_model(
 
         parts = [
             f"[{option_number}]",
-            str(row["Model"]),
-            f"Parameters={row['Parameters']}"
+            str(row["Model"])
         ]
 
-        if (
-            "Rank" in eligible_models.columns
-            and pd.notna(row.get("Rank"))
-        ):
+        rank = row.get(
+            "Test Selection Rank"
+        )
+
+        if pd.notna(rank):
+
             parts.insert(
                 1,
-                f"Rank={row['Rank']}"
+                f"Rank={int(rank)}"
             )
 
         for metric in metric_columns:
@@ -2307,6 +1020,7 @@ def choose_test_eligible_model(
             )
 
             if pd.notna(value):
+
                 parts.append(
                     f"{metric}={value:.6f}"
                 )
@@ -2315,53 +1029,37 @@ def choose_test_eligible_model(
             " | ".join(parts)
         )
 
-    while True:
 
-        choice = input(
-            f"Select model for final test [1-{len(eligible_models)}]: "
-        ).strip()
+def choose_test_eligible_model(
+    target,
+    eligible_models
+):
 
-        try:
-            choice_number = int(
-                choice
-            )
-        except ValueError:
-            print(
-                "Please enter a number from "
-                f"1 to {len(eligible_models)}."
-            )
-            continue
+    if eligible_models.empty:
 
-        if not (
-            1
-            <= choice_number
-            <= len(eligible_models)
-        ):
-            print(
-                "Please enter a number from "
-                f"1 to {len(eligible_models)}."
-            )
-            continue
-
-        selected = eligible_models.iloc[
-            choice_number - 1
-        ]
-
-        model_name = selected[
-            "Model"
-        ]
-
-        parameters = parse_selected_parameters(
-            selected[
-                "Parameters"
-            ]
+        raise ValueError(
+            f"{target} has no test-eligible models."
         )
 
-        logger.info(
-            "%s | User selected test-eligible model=%s | Parameters=%s",
-            target,
-            model_name,
-            parameters
+
+    ########################################
+    # Only One Choice
+    ########################################
+
+    if len(eligible_models) == 1:
+
+        selected = eligible_models.iloc[0]
+
+        model_name, parameters = (
+            selected_model_from_row(
+                selected
+            )
+        )
+
+        print(
+            f"\n{target}"
+            f"\nOnly one eligible model: "
+            f"{model_name}"
         )
 
         return (
@@ -2369,6 +1067,237 @@ def choose_test_eligible_model(
             parameters
         )
 
+
+    ########################################
+    # Show Choices
+    ########################################
+
+    display_test_eligible_models(
+        target=target,
+        eligible_models=eligible_models
+    )
+
+
+    ########################################
+    # Ask User
+    ########################################
+
+    while True:
+
+        choice = input(
+            f"\nSelect model for {target} "
+            f"[1-{len(eligible_models)}]: "
+        ).strip()
+
+        try:
+
+            choice_number = int(
+                choice
+            )
+
+        except ValueError:
+
+            print(
+                "Please enter a number from "
+                f"1 to {len(eligible_models)}."
+            )
+
+            continue
+
+
+        if not (
+            1
+            <= choice_number
+            <= len(eligible_models)
+        ):
+
+            print(
+                "Please enter a number from "
+                f"1 to {len(eligible_models)}."
+            )
+
+            continue
+
+
+        selected = eligible_models.iloc[
+            choice_number - 1
+        ]
+
+        return selected_model_from_row(
+            selected
+        )
+
+def select_all_test_models(
+    targets,
+    eligible_models_by_target
+):
+
+    selections = {}
+
+
+    ########################################
+    # Global Selection Mode
+    ########################################
+
+    print("\n" + "=" * 100)
+    print("FINAL TEST MODEL SELECTION")
+    print("=" * 100)
+
+    print(
+        "\n[1] Automatically select Rank 1 "
+        "for every target"
+    )
+
+    print(
+        "[2] Manually choose the model "
+        "for every target"
+    )
+
+
+    while True:
+
+        mode = input(
+            "\nSelection mode [1/2]: "
+        ).strip()
+
+        if mode in {
+            "1",
+            "2"
+        }:
+            break
+
+        print(
+            "Please enter 1 or 2."
+        )
+
+
+    auto_rank_one = (
+        mode == "1"
+    )
+
+
+    ########################################
+    # Collect ALL Selections
+    ########################################
+
+    for target_number, target in enumerate(
+        targets,
+        start=1
+    ):
+
+        eligible_models = (
+            eligible_models_by_target[
+                target
+            ]
+        )
+
+
+        print(
+            f"\n\nTARGET "
+            f"[{target_number}/{len(targets)}]"
+        )
+
+
+        ####################################
+        # Automatic Rank 1
+        ####################################
+
+        if auto_rank_one:
+
+            # DataFrame has already been ordered
+            # by Test Selection Rank.
+            selected = (
+                eligible_models
+                .sort_values(
+                    "Test Selection Rank"
+                )
+                .iloc[0]
+            )
+
+            model_name, parameters = (
+                selected_model_from_row(
+                    selected
+                )
+            )
+
+            print(
+                f"{target}"
+                f"\nAUTO SELECTED: "
+                f"Rank 1 | {model_name}"
+            )
+
+
+        ####################################
+        # Manual Selection
+        ####################################
+
+        else:
+
+            model_name, parameters = (
+                choose_test_eligible_model(
+                    target=target,
+                    eligible_models=eligible_models
+                )
+            )
+
+
+        ####################################
+        # Store
+        ####################################
+
+        selections[
+            target
+        ] = {
+            "Model": model_name,
+            "Parameters": parameters
+        }
+
+
+    ########################################
+    # Summary
+    ########################################
+
+    print("\n\n" + "=" * 100)
+    print("ALL FINAL TEST MODELS SELECTED")
+    print("=" * 100)
+
+    for target_number, target in enumerate(
+        targets,
+        start=1
+    ):
+
+        selection = selections[
+            target
+        ]
+
+        print(
+            f"[{target_number}/{len(targets)}] "
+            f"{target} | "
+            f"{selection['Model']}"
+        )
+
+
+    print(
+        "\nSelection complete. "
+        "No further user input is required."
+    )
+
+    print(
+        "Starting all final tests...\n"
+    )
+
+
+    return selections
+
+
+selected_test_models = (
+    select_all_test_models(
+        targets=targets,
+        eligible_models_by_target=(
+            eligible_models_by_target
+        )
+    )
+)
 
 final_results = []
 final_errors = []
@@ -2416,30 +1345,28 @@ for target_number, target in enumerate(
 
 
         ########################################
-        # Select Test-Eligible Model
+        # Retrieve Pre-Selected Model
         ########################################
 
-        eligible_models = (
-            eligible_models_by_target[
-                target
-            ]
-        )
+        selection = selected_test_models[
+            target
+        ]
 
-        model_name, parameters = (
-            choose_test_eligible_model(
-                target=target,
-                eligible_models=eligible_models
-            )
-        )
+        model_name = selection[
+            "Model"
+        ]
+
+        parameters = selection[
+            "Parameters"
+        ]
 
 
         logger.info(
-            "%s | Selected model=%s | Parameters=%s",
+            "%s | Pre-selected model=%s | Parameters=%s",
             target,
             model_name,
             parameters
         )
-
 
         ########################################
         # Data
@@ -2670,34 +1597,57 @@ results = results[
     ~results["Model"].str.contains("Baseline", case=False, na=False)
 ]
 
-continuous = (
-    results["Target Type"].eq("continuous")
-    &
-    (
-        # Good magnitude + ranking prediction
-        (
-            (results["R2"] >= 0.05) &
-            (results["Rank IC"].abs() >= 0.10)
-        )
-        |
-        # Exceptionally strong ranking signal
-        (results["Rank IC"].abs() >= 0.20)
+try:
+
+    continuous = (
+        results["Target Type"].eq("continuous")
+        &
+        # The selector consumes continuous predictions by rank.
+        # R2/RMSE remain diagnostics, not admission requirements.
+        (results["Rank IC"] >= 0.10)
     )
-)
 
-binary = (
-    results["Target Type"].eq("binary")
-    &
-    (results["ROC AUC"] >= 0.60)
-    &
-    (results["PR AUC"] >= 0.20)
-)
+except KeyError:
 
-multiclass = (
-    results["Target Type"].eq("multiclass")
-    &
-    (results["Macro F1"] >= 0.45)
-)
+    continuous = pd.Series(
+        False,
+        index=results.index
+    )
+
+
+try:
+
+    binary = (
+        results["Target Type"].eq("binary")
+        &
+        (results["ROC AUC"] >= 0.60)
+        &
+        (results["PR AUC"] >= 0.20)
+    )
+
+except KeyError:
+
+    binary = pd.Series(
+        False,
+        index=results.index
+    )
+
+
+try:
+
+    multiclass = (
+        results["Target Type"].eq("multiclass")
+        &
+        (results["Macro F1"] >= 0.45)
+    )
+
+except KeyError:
+
+    multiclass = pd.Series(
+        False,
+        index=results.index
+    )
+
 
 useful = results[
     continuous | binary | multiclass
@@ -2711,36 +1661,6 @@ useful["Predictability Score"] = useful.apply(
     axis=1
 )
 
-useful = useful[
-    (
-        (useful["Target Type"] == "continuous")
-        & (useful["Predictability Score"] >= 0.12)
-    )
-    |
-    (
-        (useful["Target Type"] == "binary")
-        & (useful["Predictability Score"] >= 0.20)
-    )
-    |
-    (
-        (useful["Target Type"] == "multiclass")
-        & (useful["Predictability Score"] >= 0.35)
-    )
-].sort_values(
-    "Predictability Score",
-    ascending=False
-)
-
-print(
-    useful[
-        [
-            "Target",
-            "Model",
-            "Parameters"
-            "Predictability Score",
-        ]
-    ].to_string(index=False)
-)
 
 def calculate_quality_score(
     row,
@@ -3090,13 +2010,19 @@ def portfolio_target_type(
     prediction_type=None,
 ):
 
-    name = str(target).strip().lower()
+    name = str(
+        target
+    ).strip().lower()
+
     prediction_type = str(
         prediction_type or ""
     ).strip().lower()
 
-    # Execution / state targets first because their names may also
-    # contain words such as volatility, return, or risk.
+
+    ########################################
+    # Execution / Market Structure
+    ########################################
+
     if (
         "market impact" in name
         or "price impact" in name
@@ -3120,6 +2046,11 @@ def portfolio_target_type(
     ):
         return "LIQUIDITY"
 
+
+    ########################################
+    # Dependence / State
+    ########################################
+
     if "covariance" in name:
         return "COVARIANCE"
 
@@ -3129,7 +2060,11 @@ def portfolio_target_type(
     if "regime" in name:
         return "REGIME"
 
-    # Intraday / event behaviour.
+
+    ########################################
+    # Recovery / Reversal
+    ########################################
+
     if (
         "recovery" in name
         or "recover" in name
@@ -3144,6 +2079,30 @@ def portfolio_target_type(
         or "mean-reversion" in name
     ):
         return "REVERSAL"
+
+
+    ########################################
+    # Volatility Barriers / Events
+    #
+    # MUST come before generic volatility.
+    ########################################
+
+    if name.startswith(
+        "volatility barrier"
+    ):
+        return "VOLATILITY_EVENT"
+
+    if (
+        "volatility event" in name
+        or "volatility spike" in name
+        or "volatility breakout" in name
+    ):
+        return "VOLATILITY_EVENT"
+
+
+    ########################################
+    # Tail Events
+    ########################################
 
     if (
         "sudden drawdown" in name
@@ -3163,64 +2122,203 @@ def portfolio_target_type(
     ):
         return "UPSIDE_EVENT"
 
-    # Volatility event must be checked before generic volatility.
-    if (
-        "volatility barrier" in name
-        or "volatility event" in name
-        or "volatility spike" in name
-        or "volatility breakout" in name
+
+    ########################################
+    # Excursions
+    ########################################
+
+    if name.startswith(
+        "time to maximum favourable excursion"
     ):
-        return "VOLATILITY_EVENT"
+        return "TIME_TO_UPSIDE_EXCURSION"
+
+    if name.startswith(
+        "time to maximum adverse excursion"
+    ):
+        return "TIME_TO_DOWNSIDE_EXCURSION"
+
+    if name.startswith(
+        "maximum favourable excursion"
+    ):
+        return "UPSIDE_EXCURSION"
+
+    if name.startswith(
+        "maximum adverse excursion"
+    ):
+        return "DOWNSIDE_EXCURSION"
+
+
+    ########################################
+    # Drawdown / Tail Risk
+    ########################################
 
     if (
-        "upside volatility" in name
-        or "positive volatility" in name
-    ):
-        return "UPSIDE_RISK"
-
-    # Tail-distribution targets.
-    if (
-        "maximum adverse excursion" in name
-        or "max adverse excursion" in name
+        name.startswith(
+            "future maximum drawdown"
+        )
         or "expected shortfall" in name
         or "conditional value at risk" in name
         or "conditional var" in name
         or "cvar" in name
         or "value at risk" in name
-        or re.search(r"\bvar\b", name)
-        or "maximum drawdown" in name
-        or "max drawdown" in name
+        or re.search(
+            r"\bvar\b",
+            name
+        )
         or "tail risk" in name
     ):
         return "TAIL_RISK"
 
+
+    ########################################
+    # Minimum / Downside Return
+    ########################################
+
     if (
-        "minimum return" in name
+        name.startswith(
+            "future minimum return"
+        )
+        or "minimum return" in name
         or "min return" in name
-        or "downside deviation" in name
-        or "downside volatility" in name
-        or "drawdown" in name
-        or "downside" in name
     ):
         return "DOWNSIDE"
+
+
+    ########################################
+    # Volatility Asymmetry
+    #
+    # Check ratio before individual
+    # upside/downside volatility.
+    ########################################
+
+    if (
+        "downside upside volatility ratio"
+        in name
+    ):
+        return "VOLATILITY_ASYMMETRY"
+
+
+    ########################################
+    # Downside Volatility
+    ########################################
+
+    if (
+        "downside volatility" in name
+        or "downside deviation" in name
+    ):
+        return "DOWNSIDE_VOLATILITY"
+
+
+    ########################################
+    # Upside Volatility
+    ########################################
+
+    if (
+        "upside volatility" in name
+        or "positive volatility" in name
+    ):
+        return "UPSIDE_VOLATILITY"
+
+
+    ########################################
+    # Absolute Movement
+    #
+    # These are NOT alpha.
+    #
+    # Future Mean Absolute Return
+    # Future Maximum Absolute Return
+    ########################################
+
+    if (
+        "mean absolute return" in name
+        or "maximum absolute return" in name
+        or "max absolute return" in name
+        or "absolute return" in name
+    ):
+        return "ABSOLUTE_MOVE"
+
+
+    ########################################
+    # Variance
+    ########################################
+
+    if (
+        name.startswith(
+            "future variance"
+        )
+        or "variance" in name
+    ):
+        return "VOLATILITY"
+
+
+    ########################################
+    # Generic Volatility
+    ########################################
 
     if "volatility" in name:
         return "VOLATILITY"
 
-    # Cross-sectional / relative alpha before generic return rules.
+
+    ########################################
+    # Risk-Adjusted Alpha
+    #
+    # Check BEFORE generic return rules.
+    ########################################
+
     if (
-        "top 20" in name
-        or "top 25" in name
-        or "top 10" in name
+        "return volatility ratio" in name
+        or "sortino ratio" in name
+        or "sharpe" in name
+        or "calmar" in name
+        or "return minus risk" in name
+        or "return drawdown ratio" in name
+        or "risk adjusted" in name
+        or "risk-adjusted" in name
+    ):
+        return "RISK_ADJUSTED_ALPHA"
+
+
+    ########################################
+    # Cross-Sectional Downside
+    ########################################
+
+    if (
+        "bottom 20 percent future return"
+        in name
+        or "bottom 25 percent future return"
+        in name
+        or "bottom quintile" in name
+        or "bottom quartile" in name
+    ):
+        return "CROSS_SECTION_DOWNSIDE"
+
+
+    ########################################
+    # Cross-Sectional Alpha
+    ########################################
+
+    if (
+        "top 20 percent future return"
+        in name
+        or "top 25 percent future return"
+        in name
+        or "top 10 percent future return"
+        in name
         or "top quintile" in name
         or "top quartile" in name
-        or "cross sectional" in name
-        or "cross-sectional" in name
+        or "future return rank" in name
         or "return rank" in name
         or "return percentile" in name
         or "return quantile" in name
+        or "cross sectional" in name
+        or "cross-sectional" in name
     ):
         return "CROSS_SECTION_ALPHA"
+
+
+    ########################################
+    # Relative Alpha
+    ########################################
 
     if (
         "excess return" in name
@@ -3231,48 +2329,97 @@ def portfolio_target_type(
     ):
         return "RELATIVE_ALPHA"
 
-    if "direction" in name:
+
+    ########################################
+    # Three-Class Direction
+    #
+    # Keep separate from binary direction
+    # because it is a different prediction
+    # problem and different evaluation metric.
+    ########################################
+
+    if name.startswith(
+        "three class direction"
+    ):
+        return "DIRECTION_MULTICLASS"
+
+
+    ########################################
+    # Binary Direction
+    ########################################
+
+    if name.startswith(
+        "future direction"
+    ):
         return "DIRECTION"
 
-    # A volatility/downside barrier has already been caught above.
-    if "barrier" in name:
+
+    ########################################
+    # Volatility barrier already caught.
+    #
+    # Remaining Barrier targets are
+    # directional path / return barriers.
+    ########################################
+
+    if name.startswith(
+        "barrier"
+    ):
         return "BARRIER_ALPHA"
 
-    if (
-        "return above" in name
-        or "return below" in name
-        or "positive return" in name
-        or "negative return" in name
-        or "return event" in name
+
+    ########################################
+    # Binary Return Thresholds
+    ########################################
+
+    if name.startswith(
+        "future return above"
     ):
         return "ALPHA_BINARY"
 
-    # Risk-adjusted return targets are still reward/alpha targets in
-    # the portfolio layer: larger predicted values are desirable.
+
+    ########################################
+    # Ordinary Signed Forward Returns
+    ########################################
+
     if (
-        "sharpe" in name
-        or "sortino" in name
-        or "calmar" in name
-        or "risk adjusted" in name
-        or "risk-adjusted" in name
+        name.startswith(
+            "forward return"
+        )
+        or name.startswith(
+            "forward log return"
+        )
     ):
         return "ALPHA"
 
+
+    ########################################
+    # Explicit Alpha / Momentum
+    ########################################
+
     if (
-        "return" in name
-        or "alpha" in name
+        "alpha" in name
         or "momentum" in name
     ):
         return "ALPHA"
 
-    # Final fallback uses the research-level prediction family.
+
+    ########################################
+    # Fallbacks
+    #
+    # Do NOT silently call unknown targets
+    # ALPHA. That hides classification bugs.
+    ########################################
+
     if prediction_type == "volatility":
         return "VOLATILITY"
 
     if prediction_type == "downside":
         return "DOWNSIDE"
 
-    return "ALPHA"
+    raise ValueError(
+        "Could not determine Portfolio Target Type "
+        f"for target: {target!r}"
+    )
 
 ########################################
 # Cross-Target Model Quality
@@ -3364,23 +2511,6 @@ def _weighted_available_mean(
     ) / total_weight
 
 
-useful = (
-    useful
-    .sort_values(
-        "Predictability Score",
-        ascending=False,
-    )
-    .drop_duplicates(
-        subset=[
-            "Target",
-        ],
-        keep="first",
-    )
-    .reset_index(
-        drop=True
-    )
-)
-
 useful[
     "Portfolio Target Type"
 ] = useful.apply(
@@ -3404,8 +2534,12 @@ useful[
     target_horizon
 )
 
+########################################
+# Absolute Quality Score
+########################################
+
 useful[
-    "Quality Score"
+    "Absolute Quality Score"
 ] = useful.apply(
     lambda row: calculate_quality_score(
         row,
@@ -3414,6 +2548,146 @@ useful[
         ],
     ),
     axis=1,
+)
+
+
+########################################
+# Relative Quality Score
+#
+# The number of targets determines the
+# available score range:
+#
+# 1 target  -> 0.500
+# 2 targets -> 0.250 to 0.750
+# 3 targets -> 0.167 to 0.833
+# 4 targets -> 0.125 to 0.875
+#
+# Position inside that range depends
+# continuously on Absolute Quality Score.
+########################################
+
+def relative_quality_score(
+    group
+):
+
+    number_targets = len(
+        group
+    )
+
+
+    ####################################
+    # Only One Target
+    ####################################
+
+    if number_targets == 1:
+
+        return pd.Series(
+            0.5,
+            index=group.index,
+            dtype=float
+        )
+
+
+    ####################################
+    # Available Relative Score Range
+    ####################################
+
+    lower_bound = (
+        0.5 / number_targets
+    )
+
+    upper_bound = (
+        1.0 - lower_bound
+    )
+
+
+    ####################################
+    # Absolute Quality Range
+    ####################################
+
+    absolute_quality = group[
+        "Absolute Quality Score"
+    ].astype(float)
+
+    minimum_quality = (
+        absolute_quality.min()
+    )
+
+    maximum_quality = (
+        absolute_quality.max()
+    )
+
+
+    ####################################
+    # All Targets Have Same Quality
+    #
+    # There is no evidence to rank them,
+    # so all receive neutral 0.5.
+    ####################################
+
+    if np.isclose(
+        maximum_quality,
+        minimum_quality
+    ):
+
+        return pd.Series(
+            0.5,
+            index=group.index,
+            dtype=float
+        )
+
+
+    ####################################
+    # Continuous Min-Max Position
+    ####################################
+
+    relative_position = (
+        (
+            absolute_quality
+            - minimum_quality
+        )
+        /
+        (
+            maximum_quality
+            - minimum_quality
+        )
+    )
+
+
+    ####################################
+    # Scale Into Allowed Range
+    ####################################
+
+    relative_quality = (
+        lower_bound
+        +
+        relative_position
+        * (
+            upper_bound
+            - lower_bound
+        )
+    )
+
+
+    return relative_quality
+
+
+########################################
+# Calculate Within Each Specific
+# Portfolio Target Type
+########################################
+
+useful[
+    "Quality Score"
+] = useful.groupby(
+    "Portfolio Target Type",
+    group_keys=False
+)["Absolute Quality Score"].transform(
+    lambda scores: relative_quality_score(
+        useful.loc[
+            scores.index
+        ]
+    )
 )
 
 missing_horizons = useful[
@@ -3436,14 +2710,23 @@ if not missing_horizons.empty:
         ),
     )
 
-
+useful = useful.sort_values(
+    [
+        "Target Type",
+        "Quality Score"
+    ],
+    ascending=[
+        True,
+        False
+    ]
+)
 
 with sqlite3.connect(
     FINAL_RESULTS_DATABASE
 ) as connection:
 
     useful.to_sql(
-        f"Most Predictable Results {STOCK_TYPE}",
+        f"{STOCK_TYPE} Passed Test Results",
         connection,
         if_exists="replace",
         index=False
