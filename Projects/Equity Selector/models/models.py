@@ -1633,10 +1633,15 @@ def fit_qda(
         reg_param=reg_param
     )
 
-    model.fit(
-        x_train,
-        y_train
-    )
+    try:
+        model.fit(
+            x_train,
+            y_train
+        )
+
+    except Exception:
+        return None
+
 
     predicted = model.predict(
         x_validation

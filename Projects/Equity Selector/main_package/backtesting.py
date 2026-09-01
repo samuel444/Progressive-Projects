@@ -828,7 +828,7 @@ def _rank_to_minus_one_one(series: pd.Series) -> pd.Series:
     return result
 
 
-def _classification_signal(
+def classification_signal(
     prediction: pd.Series,
     class_values: Sequence[Any],
 ) -> pd.Series:
@@ -994,7 +994,6 @@ def run_multi_target_portfolio_backtest(
     ] = None,
     horizon_scores: Optional[Mapping[str, Any]] = None,
     type_values: Optional[Mapping[str, float]] = None,
-    rebalance_every: int = 1,
     max_weight: float = 0.30,
     concentration_penalty: float = 0.10,
     trading_fee: float = 0.0,
@@ -1046,10 +1045,6 @@ def run_multi_target_portfolio_backtest(
         Signed importance of each portfolio target type. Missing types fall
         back to DEFAULT_TYPE_VALUES.
 
-    rebalance_every:
-        Number of unique BACKTEST dates between portfolio optimizations. Weight
-        decisions made on date t are applied to return t+1 to avoid lookahead.
-
     Returns
     -------
     dict with:
@@ -1088,8 +1083,6 @@ def run_multi_target_portfolio_backtest(
             + ", ".join(sorted(missing))
         )
 
-    if rebalance_every <= 0:
-        raise ValueError("rebalance_every must be greater than zero.")
 
     data = dataframe.copy()
     data["Date"] = pd.to_datetime(data["Date"])
@@ -1213,7 +1206,7 @@ def run_multi_target_portfolio_backtest(
             )
 
         else:
-            predictions_df[signal_column] = _classification_signal(
+            predictions_df[signal_column] = classification_signal(
                 predictions_df[prediction_column],
                 model_info["class_values"],
             )
@@ -1353,24 +1346,14 @@ def run_multi_target_portfolio_backtest(
     test_tickers = sorted(
         predictions_df["Ticker"].dropna().unique().tolist()
     )
-    rebalance_dates = backtest_dates.iloc[::rebalance_every]
 
     historical_weights = []
-    skipped_rebalances = 0
 
-    for date in rebalance_dates:
+    for date in backtest_dates:
         date_predictions = predictions_df.loc[
             predictions_df["Date"] == date,
             ["Ticker", "Date", "Overall Score"],
         ].dropna(subset=["Overall Score"])
-
-        if len(date_predictions) < 2:
-            skipped_rebalances += 1
-            continue
-
-        if max_weight * len(date_predictions) < 1:
-            skipped_rebalances += 1
-            continue
 
         portfolio = _construct_portfolio(
             date_predictions=date_predictions,
@@ -1503,13 +1486,11 @@ def run_multi_target_portfolio_backtest(
         "Average Drawdown": average_drawdown,
         "Max Drawdown": maximum_drawdown,
         "Sharpe Ratio": sharpe_ratio,
-        "Rebalance Days": int(rebalance_every),
         "Max Weight": float(max_weight),
         "Concentration Penalty": float(concentration_penalty),
         "Trading Fee": float(trading_fee),
         "Fitted Targets": int(len(fitted_models)),
         "Skipped Targets": int(len(skipped_models)),
-        "Skipped Rebalances": int(skipped_rebalances),
     }
 
     return {
@@ -1684,24 +1665,9 @@ def create_prediction_dataframe(backtest_df, fitted_models):
     for target, model_info in fitted_models.items():
         prediction = _predict_target_model(model_info, data)
 
-        if model_info["statistical_type"] == "continuous":
-            oriented = (
-                prediction
-                * float(model_info["continuous_orientation"])
-            )
-            signal = oriented.groupby(
-                data["Date"], group_keys=False
-            ).apply(_rank_to_minus_one_one)
-        else:
-            signal = _classification_signal(
-                prediction,
-                model_info["class_values"],
-            )
-
         part = data[["Date", "Ticker", "Close", "Return"]].copy()
         part["Target"] = target
         part["Prediction"] = prediction.to_numpy()
-        part["Signal"] = signal.to_numpy()
         part["Target Type"] = model_info["portfolio_type"]
         part["Statistical Type"] = model_info["statistical_type"]
         part["Horizon"] = float(model_info["horizon"])
@@ -1765,7 +1731,6 @@ def create_models_and_predictions(
 
 def portfolio_returns_from_scores(
     dataframe,
-    rebalance_every=1,
     max_weight = 0.30,
     concentration_penalty = 0.10,
     trading_fee = 0.00
@@ -1797,11 +1762,6 @@ def portfolio_returns_from_scores(
                     missing_columns
                 )
             )
-        )
-
-    if rebalance_every < 1:
-        raise ValueError(
-            "rebalance_every must be at least 1."
         )
 
 
@@ -2050,8 +2010,16 @@ def portfolio_returns_from_scores(
 
 
     for date_number, date in enumerate(
-        dates
+        dates[:-1]
     ):
+
+
+        ########################################
+        # Current Date
+        #
+        # Scores from this date determine the
+        # portfolio weights.
+        ########################################
 
         daily_data = (
             data[
@@ -2065,72 +2033,80 @@ def portfolio_returns_from_scores(
         )
 
 
-        ####################################
-        # Rebalance Only Every X Dates
-        ####################################
+        ########################################
+        # Following Trading Date
+        #
+        # These are the returns earned by the
+        # portfolio selected on the current date.
+        ########################################
 
-        if (
-            date_number
-            % rebalance_every
-            == 0
-        ):
+        tomorrow_date = dates[
+            date_number + 1
+        ]
 
-            current_weights = (
-                calculate_weights(
-                    daily_data
+        tomorrow_data = (
+            data[
+                data[
+                    "Date"
+                ].eq(
+                    tomorrow_date
                 )
+            ]
+            .copy()
+        )
+
+
+        current_weights = (
+            calculate_weights(
+                daily_data
             )
+        )
 
 
-            all_tickers = (
-                previous_weights.index
-                .union(
-                    current_weights.index
-                )
+        all_tickers = (
+            previous_weights.index
+            .union(
+                current_weights.index
             )
+        )
 
-            old_weights = (
-                previous_weights
-                .reindex(
-                    all_tickers,
-                    fill_value=0.0,
-                )
+        old_weights = (
+            previous_weights
+            .reindex(
+                all_tickers,
+                fill_value=0.0,
             )
+        )
 
-            new_weights = (
-                current_weights
-                .reindex(
-                    all_tickers,
-                    fill_value=0.0,
-                )
+        new_weights = (
+            current_weights
+            .reindex(
+                all_tickers,
+                fill_value=0.0,
             )
+        )
 
-            turnover = (
-                0.5
-                * (
-                    new_weights
-                    - old_weights
-                )
-                .abs()
-                .sum()
+        turnover = (
+            0.5
+            * (
+                new_weights
+                - old_weights
             )
+            .abs()
+            .sum()
+        )
 
-            previous_weights = (
-                current_weights.copy()
-            )
+        previous_weights = (
+            current_weights.copy()
+        )
 
-        else:
-
-            # Continue using the portfolio
-            # selected on the last rebalance.
-            turnover = 0.0
 
 
         ####################################
         # Apply Held Weights
         ####################################
 
-        daily_returns = (
+        tomorrow_returns = (
             daily_data
             .set_index(
                 "Ticker"
@@ -2140,7 +2116,7 @@ def portfolio_returns_from_scores(
         )
 
         aligned_returns = (
-            daily_returns
+            tomorrow_returns
             .reindex(
                 current_weights.index
             )
@@ -2162,12 +2138,29 @@ def portfolio_returns_from_scores(
             * trading_fee
         )
 
+        return_record = {
+            "Date": tomorrow_date,
+            "Return": net_return,
+        }
+
+        all_tickers = sorted(
+            data["Ticker"]
+            .dropna()
+            .unique()
+        )
+
+        for ticker in all_tickers:
+
+            weight = 0
+
+            if ticker in current_weights.index:
+                weight = current_weights[ticker]
+
+            return_record[ticker] = weight
+
 
         return_records.append(
-            {
-                "Date": date,
-                "Return": net_return,
-            }
+            return_record
         )
 
 
@@ -2178,7 +2171,6 @@ def portfolio_returns_from_scores(
 def run_portfolio_backtest_from_predictions(
     predictions_df,
     type_values=None,
-    rebalance_every=1,
     max_weight=0.30,
     concentration_penalty=0.10,
     trading_fee=0.0,
@@ -2193,7 +2185,7 @@ def run_portfolio_backtest_from_predictions(
     ``Horizon Score`` column in predictions_df and call again.
     """
     required = {
-        "Date", "Ticker", "Return", "Signal",
+        "Date", "Ticker", "Return", "Signal", "Direction Signal",
         "Horizon Score"
     }
     missing = required.difference(predictions_df.columns)
@@ -2203,14 +2195,14 @@ def run_portfolio_backtest_from_predictions(
             + ", ".join(sorted(missing))
         )
 
-    if rebalance_every <= 0:
-        raise ValueError("rebalance_every must be greater than zero.")
-
     predictions = predictions_df.copy()
     predictions["Date"] = pd.to_datetime(predictions["Date"])
     predictions["Signal"] = pd.to_numeric(
         predictions["Signal"], errors="coerce"
     )
+    predictions["Direction Signal"] = pd.to_numeric(
+            predictions["Direction Signal"], errors="coerce"
+        )
     predictions["Horizon Score"] = pd.to_numeric(
         predictions["Horizon Score"], errors="coerce"
     ).clip(0.0, 1.0)
@@ -2218,6 +2210,11 @@ def run_portfolio_backtest_from_predictions(
 
     predictions["Contribution"] = (
         predictions["Signal"]
+        * predictions["Horizon Score"]
+    )
+
+    predictions["Direction Contribution"]  = (
+        predictions["Direction Signal"]
         * predictions["Horizon Score"]
     )
 
@@ -2235,6 +2232,7 @@ def run_portfolio_backtest_from_predictions(
         .groupby(["Date", "Ticker", "Portfolio Target Type"], as_index=False)
         .agg(
             Contribution_Sum=("Contribution", "sum"),
+            Direction_Sum=("Direction Contribution", "sum"),
             Return=("Return", "first")
         )
     )
@@ -2305,9 +2303,24 @@ def run_portfolio_backtest_from_predictions(
         .groupby(["Date", "Ticker"], as_index=False)
         .agg(
             Stock_Score=("Type Score", "sum"),
+            Stock_Direction=("Direction_Sum", "mean"),
             Return=("Return", "first")
         )
     )
+
+    negative_direction = (
+        predictions["Stock_Direction"]
+        <
+        0
+    )
+
+    predictions.loc[
+        negative_direction,
+        "Stock_Score",
+    ] = -predictions.loc[
+        negative_direction,
+        "Stock_Score",
+    ].abs()
 
     backtest = portfolio_returns_from_scores(predictions)
 

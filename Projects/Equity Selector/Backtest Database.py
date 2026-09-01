@@ -1,10 +1,5 @@
-import ast
-import json
 import logging
-import re
-import sqlite3
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -14,6 +9,22 @@ from features import *
 from targets import *
 
 
+import ast
+import gc
+import itertools
+import logging
+import math
+import sqlite3
+from pathlib import Path
+
+from main_package import (
+    benchmark_metrics,
+    create_models_and_predictions,
+    run_portfolio_backtest_from_predictions,
+)
+
+
+
 warnings.filterwarnings("ignore")
 
 logging.basicConfig(
@@ -21,11 +32,962 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%H:%M:%S",
 )
+
 logger = logging.getLogger(__name__)
 
 
 ########################################
-# Paths
+# Settings
+########################################
+
+MARKET_TICKER = "^GSPC"
+
+# History before the requested start date is used only to warm up
+# rolling features. It is removed from the final dataframes.
+FEATURE_WARMUP_YEARS = 3
+
+# Extra calendar history after the requested end date allows forward
+# targets to be calculated near the end of a historical request.
+# If the end date is close to today, unavailable future targets will
+# correctly remain NaN.
+TARGET_LOOKAHEAD_DAYS = 400
+
+
+DEFAULT_TOKENS = [
+    "AAPL", "MSFT", "AMZN", "NVDA", "META", "TSLA", "AMD", "INTC", "QCOM", "MU",
+    "CSCO", "ORCL", "JPM", "BAC", "WFC", "C", "XOM", "CVX", "F", "GM",
+    "T", "VZ", "PFE", "JNJ", "WMT", "DIS", "GE", "HD", "NFLX", "GOOG"
+]
+
+
+########################################
+# Questions
+########################################
+
+def get_tokens(
+    prompt,
+    default,
+):
+
+    print("\nDefault:")
+    print(", ".join(default))
+
+    value = input(
+        f"\n{prompt} "
+        "(comma separated, Enter for default): "
+    ).strip()
+
+    if not value:
+        tokens = default.copy()
+
+    else:
+        tokens = list(
+            dict.fromkeys(
+                token.strip().upper()
+                for token in value.split(",")
+                if token.strip()
+            )
+        )
+
+    if MARKET_TICKER in tokens:
+        logger.warning(
+            "%s removed from the stock universe because it is "
+            "downloaded separately as the market benchmark.",
+            MARKET_TICKER,
+        )
+
+        tokens = [
+            token
+            for token in tokens
+            if token != MARKET_TICKER
+        ]
+
+    if not tokens:
+        raise ValueError(
+            "At least one stock ticker must be supplied."
+        )
+
+    return tokens
+
+
+def get_date(prompt):
+
+    while True:
+
+        value = input(prompt).strip()
+
+        try:
+            return pd.Timestamp(value)
+
+        except Exception:
+            print(
+                "Please enter the date as YYYY-MM-DD."
+            )
+
+
+print("\n" + "=" * 70)
+print("MARKET AND STOCK DATA")
+print("=" * 70)
+
+
+tokens = get_tokens(
+    "Stock tickers:",
+    DEFAULT_TOKENS,
+)
+
+
+start_date = get_date(
+    "Start date (YYYY-MM-DD): "
+)
+
+
+end_date = get_date(
+    "End date   (YYYY-MM-DD): "
+)
+
+
+TRAIN_END = get_date(
+    "Training data end date (YYYY-MM-DD): "
+)
+
+
+BACKTEST_START = get_date(
+    "Backtest start date (YYYY-MM-DD): "
+)
+
+
+BACKTEST_END = get_date(
+    "Backtest end date (YYYY-MM-DD): "
+)
+
+if end_date <= start_date:
+    raise ValueError(
+        "End date must be after start date."
+    )
+
+
+########################################
+# Download Market And Stocks Once
+########################################
+
+download_start = (
+    start_date
+    )
+
+
+
+# yfinance accepts a future end date, but naturally only returns data
+# that currently exists. Adding one day keeps its exclusive end date
+# behaviour from dropping the latest available trading date.
+download_end = end_date 
+
+
+symbols = list(
+    dict.fromkeys(
+        tokens
+        + [MARKET_TICKER]
+    )
+)
+
+
+logger.info(
+    "Downloading %d stocks and %s | %s -> %s",
+    len(tokens),
+    MARKET_TICKER,
+    download_start.date(),
+    download_end.date(),
+)
+
+
+raw_download = yf.download(
+    symbols,
+    start=download_start.strftime("%Y-%m-%d"),
+    end=download_end.strftime("%Y-%m-%d"),
+    auto_adjust=True,
+    progress=False,
+    group_by="ticker",
+    multi_level_index=True,
+)
+
+
+if raw_download.empty:
+    raise ValueError(
+        "yfinance returned no data."
+    )
+
+
+logger.info(
+    "Download complete | rows=%d | symbol groups=%d",
+    len(raw_download),
+    raw_download.columns.get_level_values(0).nunique(),
+)
+
+
+downloaded_symbols = set(
+    raw_download
+    .columns
+    .get_level_values(0)
+)
+
+
+if MARKET_TICKER not in downloaded_symbols:
+    raise ValueError(
+        f"Market benchmark {MARKET_TICKER} was not returned by yfinance."
+    )
+
+
+raw_market = (
+    raw_download[MARKET_TICKER]
+    .copy()
+    .dropna(how="all")
+)
+
+
+raw_market.index = pd.to_datetime(
+    raw_market.index
+)
+
+
+raw_market.index.name = "Date"
+
+
+########################################
+# Feature Helpers
+########################################
+
+def run_step(
+    dataframe,
+    step_name,
+    function,
+    panel_name,
+):
+
+    columns_before = len(dataframe.columns)
+
+    dataframe = function(dataframe)
+
+    logger.debug(
+        "%s | %s complete | columns added=%d | total columns=%d",
+        panel_name,
+        step_name,
+        len(dataframe.columns) - columns_before,
+        len(dataframe.columns),
+    )
+
+    return dataframe
+
+
+def add_all_individual_features(
+    dataframe,
+    benchmark_df,
+    panel_name,
+    include_market_comparison=True,
+):
+
+    dataframe = dataframe.copy()
+
+    dataframe["Return"] = (
+        dataframe["Close"].pct_change()
+    )
+
+    feature_steps = [
+        (
+            "return features",
+            lambda x: all_return_features(x),
+        ),
+        (
+            "momentum features",
+            lambda x: all_momentum_features(x),
+        ),
+        (
+            "volatility features",
+            lambda x: all_volatility_features(x),
+        ),
+        (
+            "range-volatility features",
+            lambda x: all_range_volatility_features(x),
+        ),
+        (
+            "trend features",
+            lambda x: all_trend_features(x),
+        ),
+        (
+            "moving-average features",
+            lambda x: all_moving_average_features(x),
+        ),
+        (
+            "drawdown features",
+            lambda x: all_drawdown_features(x),
+        ),
+        (
+            "distribution features",
+            lambda x: all_distribution_features(x),
+        ),
+        (
+            "tail-risk features",
+            lambda x: all_tail_risk_features(x),
+        ),
+        (
+            "volume features",
+            lambda x: all_volume_features(x),
+        ),
+        (
+            "liquidity features",
+            lambda x: all_liquidity_features(x),
+        ),
+        (
+            "OHLC features",
+            lambda x: all_ohlc_features(x),
+        ),
+    ]
+
+    if include_market_comparison:
+        feature_steps.extend(
+            [
+                (
+                    "market-relative features",
+                    lambda x: all_market_relative_features(
+                        x,
+                        market_df=benchmark_df,
+                    ),
+                ),
+                (
+                    "beta features",
+                    lambda x: all_beta_features(
+                        x,
+                        market_df=benchmark_df,
+                    ),
+                ),
+                (
+                    "correlation features",
+                    lambda x: all_correlation_features(
+                        x,
+                        market_df=benchmark_df,
+                    ),
+                ),
+                (
+                    "residual features",
+                    lambda x: all_residual_features(
+                        x,
+                        market_df=benchmark_df,
+                    ),
+                ),
+            ]
+        )
+
+    feature_steps.extend(
+        [
+            (
+                "technical features",
+                lambda x: all_technical_features(x),
+            ),
+            (
+                "regime features",
+                lambda x: all_regime_features(x),
+            ),
+            (
+                "interaction features",
+                lambda x: all_interaction_features(x),
+            ),
+            (
+                "composite features",
+                lambda x: all_composite_features(x),
+            ),
+            (
+                "experimental features",
+                lambda x: all_experimental_features(x),
+            ),
+        ]
+    )
+
+    for step_name, feature_function in feature_steps:
+        dataframe = run_step(
+            dataframe,
+            step_name,
+            feature_function,
+            panel_name,
+        )
+
+    return dataframe
+
+
+def create_market_breadth_and_dispersion(
+    raw_stock_frames,
+):
+
+    if len(raw_stock_frames) <= 1:
+        logger.warning(
+            "Breadth and dispersion features require more than one usable stock."
+        )
+
+        return pd.DataFrame(
+            index=raw_market.index
+        )
+
+    wide_parts = []
+
+    for ticker, stock_df in raw_stock_frames.items():
+        part = stock_df[
+            [
+                "Open",
+                "High",
+                "Low",
+                "Close",
+                "Volume",
+            ]
+        ].copy()
+
+        part["Return"] = part["Close"].pct_change()
+
+        part.columns = pd.MultiIndex.from_product(
+            [
+                part.columns,
+                [ticker],
+            ]
+        )
+
+        wide_parts.append(part)
+
+    wide = pd.concat(
+        wide_parts,
+        axis=1,
+    ).sort_index()
+
+    original_columns = set(wide.columns)
+
+    wide = all_breadth_features(wide)
+
+    wide = all_dispersion_features(wide)
+
+    market_feature_columns = [
+        column
+        for column in wide.columns
+        if column not in original_columns
+    ]
+
+    market_features = wide[
+        market_feature_columns
+    ].copy()
+
+    market_features.columns = [
+        column[0]
+        if isinstance(column, tuple)
+        else column
+        for column in market_features.columns
+    ]
+
+    market_features = market_features.loc[
+        :,
+        ~market_features.columns.duplicated(),
+    ]
+
+    return market_features
+
+
+########################################
+# Target Helpers
+########################################
+
+def add_all_time_series_targets(
+    dataframe,
+    benchmark_df,
+    panel_name,
+):
+
+    target_steps = [
+        (
+            "return targets",
+            lambda x: all_return_targets(
+                x,
+                benchmark_df=benchmark_df,
+            ),
+        ),
+        (
+            "volatility targets",
+            lambda x: all_volatility_targets(x),
+        ),
+        (
+            "direction targets",
+            lambda x: all_direction_targets(x),
+        ),
+        (
+            "barrier targets",
+            lambda x: all_barrier_targets(x),
+        ),
+        (
+            "excursion targets",
+            lambda x: all_excursion_targets(x),
+        ),
+        (
+            "drawdown targets",
+            lambda x: all_drawdown_targets(x),
+        ),
+        (
+            "risk-adjusted targets",
+            lambda x: all_risk_adjusted_targets(x),
+        ),
+    ]
+
+    for step_name, target_function in target_steps:
+        dataframe = run_step(
+            dataframe,
+            step_name,
+            target_function,
+            panel_name,
+        )
+
+    return dataframe
+
+
+########################################
+# Prepare Raw Stock Frames
+########################################
+
+raw_stock_frames = {}
+
+
+for ticker in tokens:
+
+    if ticker not in downloaded_symbols:
+        logger.warning(
+            "%s skipped because it was not returned by yfinance.",
+            ticker,
+        )
+        continue
+
+    ticker_df = (
+        raw_download[ticker]
+        .copy()
+        .dropna(how="all")
+    )
+
+    ticker_df.index = pd.to_datetime(
+        ticker_df.index
+    )
+
+    ticker_df.index.name = "Date"
+
+    if ticker_df.empty:
+        logger.warning(
+            "%s skipped because it has no observations.",
+            ticker,
+        )
+        continue
+
+    raw_stock_frames[ticker] = ticker_df
+
+
+if not raw_stock_frames:
+    raise ValueError(
+        "No usable stock data was returned."
+    )
+
+
+logger.info(
+    "Raw stock preparation complete | requested=%d | usable=%d",
+    len(tokens),
+    len(raw_stock_frames),
+)
+
+
+########################################
+# Build Market Dataframe
+########################################
+
+# Market-relative, beta, correlation and residual functions are not
+# applied to the market against itself because they would only create
+# constant/degenerate features. Every applicable standalone feature
+# family is still applied.
+
+market = raw_market.copy()
+
+market["Return"] = (
+    market["Close"]
+    .pct_change()
+)
+
+market_level_features = (
+    create_market_breadth_and_dispersion(
+        raw_stock_frames
+    )
+)
+
+logger.info(
+    "S&P500 | beginning all targets"
+)
+
+
+market = add_all_time_series_targets(
+    dataframe=market,
+    benchmark_df=raw_market,
+    panel_name="MARKET",
+)
+
+
+logger.info(
+    "MARKET | targets complete | rows=%d | columns=%d",
+    len(market),
+    len(market.columns),
+)
+
+
+market["Ticker"] = MARKET_TICKER
+market["Date"] = market.index
+
+market = market.reset_index(
+    drop=True
+)
+
+
+
+########################################
+# Build Individual Stock Dataframes
+########################################
+
+stock_parts = []
+individual_stock_feature_columns = None
+
+
+for ticker, raw_stock in raw_stock_frames.items():
+
+    logger.info(
+        "STOCKS | %s | beginning all features",
+        ticker,
+    )
+
+    stock = add_all_individual_features(
+        dataframe=raw_stock,
+        benchmark_df=raw_market,
+        panel_name=f"STOCKS | {ticker}",
+        include_market_comparison=True,
+    )
+
+    if individual_stock_feature_columns is None:
+        individual_stock_feature_columns = set(
+            stock.columns
+        )
+
+    logger.info(
+        "STOCKS | %s | beginning all targets",
+        ticker,
+    )
+    
+
+    stock = add_all_time_series_targets(
+        dataframe=stock,
+        benchmark_df=raw_market,
+        panel_name=f"STOCKS | {ticker}",
+    )
+
+    stock["Ticker"] = ticker
+    stock["Date"] = stock.index
+
+    stock_parts.append(
+        stock.reset_index(drop=True)
+    )
+
+
+stocks = pd.concat(
+    stock_parts,
+    ignore_index=True,
+    sort=False,
+)
+
+
+logger.info(
+    "STOCKS | individual panels combined | rows=%d | columns=%d | tickers=%d",
+    len(stocks),
+    len(stocks.columns),
+    stocks["Ticker"].nunique(),
+)
+
+
+########################################
+# Add Every Cross-Sectional Stock Feature
+########################################
+
+base_columns = {
+    "Date",
+    "Ticker",
+    "Open",
+    "High",
+    "Low",
+    "Close",
+    "Volume",
+    "Return",
+}
+
+
+cross_sectional_columns = [
+    column
+    for column in sorted(individual_stock_feature_columns)
+    if column not in base_columns
+    and column in stocks.columns
+    and pd.api.types.is_numeric_dtype(
+        stocks[column]
+    )
+]
+
+
+if len(raw_stock_frames) > 1:
+    logger.info(
+        "STOCKS | generating cross-sectional ranks and z-scores for %d features",
+        len(cross_sectional_columns),
+    )
+
+    stocks = all_cross_sectional_features(
+        stocks,
+        columns=cross_sectional_columns,
+        date_col="Date",
+    )
+
+
+########################################
+# Add Every Cross-Sectional Ranking Target
+########################################
+
+if len(raw_stock_frames) > 1:
+    logger.info(
+        "STOCKS | generating all ranking targets"
+    )
+
+    stocks = all_ranking_targets(
+        stocks,
+        ticker_col="Ticker",
+        date_col="Date",
+        price_col="Close",
+    )
+
+
+########################################
+# Add Market Breadth/Dispersion To Stocks
+########################################
+
+market_feature_frame = (
+    market_level_features
+    .reset_index()
+)
+
+
+market_feature_frame = market_feature_frame.rename(
+    columns={
+        market_feature_frame.columns[0]: "Date"
+    }
+)
+
+
+stocks = stocks.merge(
+    market_feature_frame,
+    on="Date",
+    how="left",
+    suffixes=("", " Market"),
+    validate="many_to_one",
+)
+
+
+logger.info(
+    "STOCKS | market breadth/dispersion merged | market columns=%d | rows=%d",
+    len(market_feature_frame.columns) - 1,
+    len(stocks),
+)
+
+
+########################################
+# Clean And Restrict To Requested Dates
+########################################
+
+def finish_dataframe(
+    dataframe,
+    dataframe_name,
+):
+
+    dataframe = dataframe.copy()
+
+    dataframe["Date"] = pd.to_datetime(
+        dataframe["Date"]
+    )
+
+    dataframe = dataframe[
+        dataframe["Date"].between(
+            start_date,
+            end_date,
+            inclusive="both",
+        )
+    ].copy()
+
+    numeric_columns = dataframe.select_dtypes(
+        include="number"
+    ).columns
+
+    dataframe[numeric_columns] = (
+        dataframe[numeric_columns]
+        .replace(
+            [
+                np.inf,
+                -np.inf,
+            ],
+            np.nan,
+        )
+    )
+
+    dataframe = (
+        dataframe
+        .sort_values(
+            [
+                "Date",
+                "Ticker",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+    logger.info(
+        "%s complete | rows: %d | columns: %d | tickers: %d | dates: %d",
+        dataframe_name,
+        len(dataframe),
+        len(dataframe.columns),
+        dataframe["Ticker"].nunique(),
+        dataframe["Date"].nunique(),
+    )
+
+    return dataframe
+
+
+market = finish_dataframe(
+    market,
+    "MARKET",
+)
+
+
+stocks = finish_dataframe(
+    stocks,
+    "STOCKS",
+)
+
+
+########################################
+# Logging
+########################################
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+logger = logging.getLogger(__name__)
+
+
+########################################
+# Required Existing Dataframes
+########################################
+
+if "stocks" not in globals():
+    raise NameError(
+        "The stocks dataframe must already exist before this code runs."
+    )
+
+if "market" not in globals():
+    raise NameError(
+        "The market dataframe must already exist before this code runs."
+    )
+
+
+stocks = stocks.copy()
+market = market.copy()
+
+
+logger.info(
+    "Input dataframes received | stocks=%d rows x %d columns | market=%d rows x %d columns",
+    len(stocks),
+    len(stocks.columns),
+    len(market),
+    len(market.columns),
+)
+
+
+required_stock_columns = {
+    "Date",
+    "Ticker",
+    "Close",
+    "Return",
+}
+
+missing_stock_columns = (
+    required_stock_columns
+    - set(stocks.columns)
+)
+
+if missing_stock_columns:
+    raise ValueError(
+        "stocks is missing required columns: "
+        + ", ".join(sorted(missing_stock_columns))
+    )
+
+
+required_market_columns = {
+    "Date",
+    "Close",
+    "Return",
+}
+
+missing_market_columns = (
+    required_market_columns
+    - set(market.columns)
+)
+
+if missing_market_columns:
+    raise ValueError(
+        "market is missing required columns: "
+        + ", ".join(sorted(missing_market_columns))
+    )
+
+
+stocks["Date"] = pd.to_datetime(
+    stocks["Date"],
+    errors="coerce",
+)
+
+market["Date"] = pd.to_datetime(
+    market["Date"],
+    errors="coerce",
+)
+
+
+stocks = (
+    stocks
+    .dropna(
+        subset=[
+            "Date",
+            "Ticker",
+            "Close",
+        ]
+    )
+    .sort_values(
+        [
+            "Date",
+            "Ticker",
+        ]
+    )
+    .reset_index(drop=True)
+)
+
+
+market = (
+    market
+    .dropna(
+        subset=[
+            "Date",
+            "Close",
+        ]
+    )
+    .sort_values("Date")
+    .reset_index(drop=True)
+)
+
+
+########################################
+# Paths And Stock Type
 ########################################
 
 DATA_DIR = Path(
@@ -42,34 +1004,11 @@ SELECTED_FEATURES_FILE = (
     / "Selected_Features.txt"
 )
 
-# This is the cached database produced by this file and consumed by
-# 02_train_and_backtest.py.
-OUTPUT_DB = (
-    DATA_DIR
-    / "Backtest_Features_Targets.db"
-)
-
-
-########################################
-# Build Settings
-########################################
-
-# Extra raw history used only to warm up rolling features.
-FEATURE_WARMUP_YEARS = 3
-
-DEFAULT_REBALANCE_EVERY = 60
-
-
-########################################
-# Stock Type
-########################################
 
 STOCK_TYPE = (
     "High Liquidity 30"
     # "Medium Liquidity 30"
     # "Lower Liquidity 30"
-    # "Intraday Higher Liquidity 30"
-    # "Intraday Medium Liquidity 30"
     # "Sector Spread 30"
     # "Liquidity Barbell 30"
     # "Institutional Liquidity 60"
@@ -77,6 +1016,7 @@ STOCK_TYPE = (
     # "Medium Large Liquidity 60"
     # "All Liquidity 90"
 )
+
 
 STOCK_TYPE_INDICES = {
     "High Liquidity 30": 0,
@@ -92,30 +1032,84 @@ STOCK_TYPE_INDICES = {
     "All Liquidity 90": 10,
 }
 
+
 if STOCK_TYPE not in STOCK_TYPE_INDICES:
     raise ValueError(
         f"Unknown STOCK_TYPE: {STOCK_TYPE}"
     )
 
-stock_type_index = STOCK_TYPE_INDICES[STOCK_TYPE]
-
 
 ########################################
-# Load Previously Selected Research Results
+# Date Questions
 ########################################
+
+def get_date(
+    prompt,
+    default=None,
+):
+
+    while True:
+
+        default_text = (
+            f" [{pd.Timestamp(default).date()}]"
+            if default is not None
+            else ""
+        )
+
+        value = input(
+            f"{prompt}{default_text}: "
+        ).strip()
+
+        if not value and default is not None:
+            return pd.Timestamp(default)
+
+        try:
+            return pd.Timestamp(value)
+
+        except Exception:
+            print(
+                "Please enter the date as YYYY-MM-DD."
+            )
+
+
+available_start = stocks["Date"].min()
+available_end = stocks["Date"].max()
+
+
+
+if not (
+    available_start
+    <= TRAIN_END
+    < BACKTEST_START
+    <= BACKTEST_END
+    <= available_end
+):
+    raise ValueError(
+        "Dates must satisfy:\n"
+        "available start <= training end < backtest start "
+        "<= backtest end <= available end"
+    )
+
 
 logger.info(
-    "Loading previously selected model specifications"
+    "Requested training end: %s",
+    TRAIN_END.date(),
 )
 
-with sqlite3.connect(
-    FINAL_RESULTS_DB
-) as connection:
+logger.info(
+    "Backtest period: %s to %s",
+    BACKTEST_START.date(),
+    BACKTEST_END.date(),
+)
 
-    test_results = pd.read_sql_query(
-        f"SELECT * FROM 'Most Predictable Results {STOCK_TYPE}'",
-        connection,
-    )
+
+########################################
+# Load Selected Feature Lists
+########################################
+
+stock_type_index = (
+    STOCK_TYPE_INDICES[STOCK_TYPE]
+)
 
 
 with open(
@@ -128,14 +1122,9 @@ with open(
     )
 
 
-if stock_type_index >= len(
-    selected_feature_lines
-):
-
+if stock_type_index >= len(selected_feature_lines):
     raise ValueError(
-        f"Selected_Features.txt has no line "
-        f"for {STOCK_TYPE} at index "
-        f"{stock_type_index}."
+        f"Selected_Features.txt has no line for {STOCK_TYPE}."
     )
 
 
@@ -146,12 +1135,9 @@ selected_feature_line = (
 )
 
 
-if selected_feature_line == "":
-
+if not selected_feature_line:
     raise ValueError(
-        f"Selected_Features.txt line "
-        f"{stock_type_index} is empty "
-        f"for {STOCK_TYPE}."
+        f"Selected_Features.txt is empty for {STOCK_TYPE}."
     )
 
 
@@ -160,2577 +1146,1238 @@ selected_features = ast.literal_eval(
 )
 
 
+if not isinstance(selected_features, dict):
+    raise ValueError(
+        "Selected_Features.txt must contain a Target -> Features dictionary."
+    )
+
+
 logger.info(
-    "Stock type: %s | selected-feature line index: %d | "
-    "predictable-results table: Most Predictable Results %s",
-    STOCK_TYPE,
-    stock_type_index,
-    STOCK_TYPE,
+    "Selected feature map loaded | targets=%d",
+    len(selected_features),
 )
 
 
 ########################################
-# Select All Investigation-Worthy Models
+# Load Best Passed Model Per Target
 ########################################
 
-# These remain the same investigation thresholds used by the
-# existing research pipeline. They are applied to the original
-# Predictability Score before the new cross-target Quality Score
-# is calculated.
-INVESTIGATION_SCORE_THRESHOLDS = {
-    "continuous": 0.12,
-    "binary": 0.20,
-    "multiclass": 0.35,
+RESULTS_TABLE = (
+    f"{STOCK_TYPE} Passed Test Results"
+)
+
+
+logger.info(
+    "Loading passed model results | %s",
+    RESULTS_TABLE,
+)
+
+
+with sqlite3.connect(
+    FINAL_RESULTS_DB
+) as connection:
+
+    test_results = pd.read_sql_query(
+        f'SELECT * FROM "{RESULTS_TABLE}"',
+        connection,
+    )
+
+
+logger.info(
+    "Passed model results loaded | rows=%d | columns=%d",
+    len(test_results),
+    len(test_results.columns),
+)
+
+
+required_result_columns = {
+    "Target",
+    "Model",
+    "Parameters",
+    "Target Type",
+    "Portfolio Target Type",
+    "Horizon",
+    "Quality Score",
 }
 
 
-# The main output table requested for the portfolio-weighting
-# pipeline. The STOCK_TYPE is included so multiple universes can
-# coexist safely in the same SQLite database.
-SELECTED_MODELS_TABLE = (
-    f"Selected Models {STOCK_TYPE}"
-)
-
-# Keep target-specific feature lists in a separate helper table so
-# the requested Selected Models table stays clean while downstream
-# training code can still recover the correct features for a target.
-SELECTED_MODEL_FEATURES_TABLE = (
-    f"Selected Model Features {STOCK_TYPE}"
+missing_result_columns = (
+    required_result_columns
+    - set(test_results.columns)
 )
 
 
-########################################
-# Portfolio Target Type Classification
-########################################
-
-def portfolio_target_type(
-    target,
-    prediction_type=None,
-):
-
-    name = str(target).strip().lower()
-    prediction_type = str(
-        prediction_type or ""
-    ).strip().lower()
-
-    # Execution / state targets first because their names may also
-    # contain words such as volatility, return, or risk.
-    if (
-        "market impact" in name
-        or "price impact" in name
-    ):
-        return "MARKET_IMPACT"
-
-    if (
-        "execution" in name
-        or "fill probability" in name
-        or "fill rate" in name
-        or "slippage" in name
-    ):
-        return "EXECUTION"
-
-    if (
-        "liquidity" in name
-        or "bid ask spread" in name
-        or "bid-ask spread" in name
-        or "order book depth" in name
-        or "order-book depth" in name
-    ):
-        return "LIQUIDITY"
-
-    if "covariance" in name:
-        return "COVARIANCE"
-
-    if "correlation" in name:
-        return "CORRELATION"
-
-    if "regime" in name:
-        return "REGIME"
-
-    # Intraday / event behaviour.
-    if (
-        "recovery" in name
-        or "recover" in name
-        or "bounce back" in name
-    ):
-        return "RECOVERY"
-
-    if (
-        "reversal" in name
-        or "reverse" in name
-        or "mean reversion" in name
-        or "mean-reversion" in name
-    ):
-        return "REVERSAL"
-
-    if (
-        "sudden drawdown" in name
-        or "crash" in name
-        or "tail event" in name
-        or "extreme downside" in name
-        or "downside event" in name
-        or "negative spike" in name
-    ):
-        return "TAIL_EVENT"
-
-    if (
-        "upside spike" in name
-        or "positive spike" in name
-        or "upside event" in name
-        or "positive event" in name
-    ):
-        return "UPSIDE_EVENT"
-
-    # Volatility event must be checked before generic volatility.
-    if (
-        "volatility barrier" in name
-        or "volatility event" in name
-        or "volatility spike" in name
-        or "volatility breakout" in name
-    ):
-        return "VOLATILITY_EVENT"
-
-    if (
-        "upside volatility" in name
-        or "positive volatility" in name
-    ):
-        return "UPSIDE_RISK"
-
-    # Tail-distribution targets.
-    if (
-        "maximum adverse excursion" in name
-        or "max adverse excursion" in name
-        or "expected shortfall" in name
-        or "conditional value at risk" in name
-        or "conditional var" in name
-        or "cvar" in name
-        or "value at risk" in name
-        or re.search(r"\bvar\b", name)
-        or "maximum drawdown" in name
-        or "max drawdown" in name
-        or "tail risk" in name
-    ):
-        return "TAIL_RISK"
-
-    if (
-        "minimum return" in name
-        or "min return" in name
-        or "downside deviation" in name
-        or "downside volatility" in name
-        or "drawdown" in name
-        or "downside" in name
-    ):
-        return "DOWNSIDE"
-
-    if "volatility" in name:
-        return "VOLATILITY"
-
-    # Cross-sectional / relative alpha before generic return rules.
-    if (
-        "top 20" in name
-        or "top 25" in name
-        or "top 10" in name
-        or "top quintile" in name
-        or "top quartile" in name
-        or "cross sectional" in name
-        or "cross-sectional" in name
-        or "return rank" in name
-        or "return percentile" in name
-        or "return quantile" in name
-    ):
-        return "CROSS_SECTION_ALPHA"
-
-    if (
-        "excess return" in name
-        or "relative return" in name
-        or "abnormal return" in name
-        or "residual return" in name
-        or "benchmark return" in name
-    ):
-        return "RELATIVE_ALPHA"
-
-    if "direction" in name:
-        return "DIRECTION"
-
-    # A volatility/downside barrier has already been caught above.
-    if "barrier" in name:
-        return "BARRIER_ALPHA"
-
-    if (
-        "return above" in name
-        or "return below" in name
-        or "positive return" in name
-        or "negative return" in name
-        or "return event" in name
-    ):
-        return "ALPHA_BINARY"
-
-    # Risk-adjusted return targets are still reward/alpha targets in
-    # the portfolio layer: larger predicted values are desirable.
-    if (
-        "sharpe" in name
-        or "sortino" in name
-        or "calmar" in name
-        or "risk adjusted" in name
-        or "risk-adjusted" in name
-    ):
-        return "ALPHA"
-
-    if (
-        "return" in name
-        or "alpha" in name
-        or "momentum" in name
-    ):
-        return "ALPHA"
-
-    # Final fallback uses the research-level prediction family.
-    if prediction_type == "volatility":
-        return "VOLATILITY"
-
-    if prediction_type == "downside":
-        return "DOWNSIDE"
-
-    return "ALPHA"
-
-
-########################################
-# Horizon Extraction
-########################################
-
-def target_horizon(
-    target,
-):
-
-    name = str(target).strip().lower()
-
-    # Prefer values with explicit units. This allows names such as
-    # "Sudden Drawdown 15m" or "Direction 1h" to be interpreted
-    # correctly even if another number appears earlier in the name.
-    explicit = re.findall(
-        r"(?<![a-z0-9])"
-        r"(\d+(?:\.\d+)?)\s*"
-        r"(m|min|mins|minute|minutes|"
-        r"h|hr|hrs|hour|hours|"
-        r"d|day|days|"
-        r"w|week|weeks)"
-        r"(?![a-z])",
-        name,
-    )
-
-    if explicit:
-        value = float(
-            explicit[-1][0]
-        )
-
-        return (
-            int(value)
-            if value.is_integer()
-            else value
-        )
-
-    # Daily targets in the existing targets.py convention generally
-    # finish with the horizon, e.g. "Forward Return 20". Taking the
-    # last standalone number also avoids using an earlier threshold
-    # such as the 2 in "Return Above 2% 20".
-    numbers = re.findall(
-        r"(?<![a-z0-9.])"
-        r"(\d+(?:\.\d+)?)"
-        r"(?![a-z0-9.%])",
-        name,
-    )
-
-    if not numbers:
-        # Do not fall back to arbitrary numbers because many target
-        # names contain thresholds such as 2% or 5%. If no horizon
-        # can be distinguished safely, store NULL and log it later.
-        return np.nan
-
-    value = float(
-        numbers[-1]
-    )
-
-    return (
-        int(value)
-        if value.is_integer()
-        else value
+if missing_result_columns:
+    raise ValueError(
+        "Passed-results table is missing columns: "
+        + ", ".join(sorted(missing_result_columns))
     )
 
 
-########################################
-# Cross-Target Model Quality
-########################################
+selected_models_df = test_results.copy()
 
-def _normalise_column_name(
-    value,
-):
 
-    return re.sub(
-        r"[^a-z0-9]+",
-        "",
-        str(value).lower(),
+selected_models_df = selected_models_df[
+    selected_models_df["Target"]
+    .astype(str)
+    .isin(selected_features)
+].copy()
+
+
+selected_models_df = selected_models_df[
+    ~selected_models_df["Model"]
+    .astype(str)
+    .str.contains(
+        "Baseline",
+        case=False,
+        na=False,
     )
+].copy()
 
 
-def _row_metric(
-    row,
-    aliases,
-):
-
-    column_lookup = {
-        _normalise_column_name(column): column
-        for column in row.index
-    }
-
-    for alias in aliases:
-
-        key = _normalise_column_name(
-            alias
-        )
-
-        if key not in column_lookup:
-            continue
-
-        value = pd.to_numeric(
-            pd.Series(
-                [
-                    row[
-                        column_lookup[key]
-                    ]
-                ]
-            ),
-            errors="coerce",
-        ).iloc[0]
-
-        if pd.notna(value):
-            return float(value)
-
-    return None
-
-
-def _clip_quality(
-    value,
-):
-
-    return float(
-        np.clip(
-            value,
-            0.0,
-            1.0,
-        )
+selected_models_df["Quality Score"] = (
+    pd.to_numeric(
+        selected_models_df["Quality Score"],
+        errors="coerce",
     )
+    .clip(0.0, 1.0)
+)
 
 
-def _weighted_available_mean(
-    values,
-):
+selected_models_df["Horizon"] = pd.to_numeric(
+    selected_models_df["Horizon"],
+    errors="coerce",
+)
 
-    # values = [(weight, value), ...]
-    available = [
-        (weight, value)
-        for weight, value in values
-        if value is not None
-        and np.isfinite(value)
+
+selected_models_df["Parameters"] = (
+    selected_models_df["Parameters"]
+    .where(
+        selected_models_df["Parameters"].notna(),
+        "{}",
+    )
+    .astype(str)
+)
+
+
+selected_models_df = selected_models_df.dropna(
+    subset=[
+        "Target",
+        "Model",
+        "Quality Score",
+        "Horizon",
     ]
-
-    if not available:
-        return None
-
-    total_weight = sum(
-        weight
-        for weight, _ in available
-    )
-
-    return sum(
-        weight * value
-        for weight, value in available
-    ) / total_weight
+).copy()
 
 
-def calculate_quality_score(
-    row,
-    portfolio_type,
-):
+sort_columns = [
+    "Quality Score",
+]
 
-    statistical_type = str(
-        row.get(
-            "Target Type",
-            "",
-        )
-    ).strip().lower()
-
-    existing_predictability = _row_metric(
-        row,
-        [
-            "Predictability Score",
-        ],
-    )
-
-    ####################################
-    # Continuous Targets
-    ####################################
-
-    if statistical_type == "continuous":
-
-        rank_ic = _row_metric(
-            row,
-            [
-                "Rank IC",
-                "Mean Rank IC",
-                "Rank IC Mean",
-                "Spearman IC",
-                "Spearman Correlation",
-                "Spearman",
-            ],
-        )
-
-        r2 = _row_metric(
-            row,
-            [
-                "R2",
-                "R^2",
-                "R Squared",
-                "R2 Score",
-                "Test R2",
-                "Test R^2",
-            ],
-        )
-
-        q_ic = (
-            _clip_quality(
-                abs(rank_ic) / 0.30
-            )
-            if rank_ic is not None
-            else None
-        )
-
-        q_r2 = (
-            _clip_quality(
-                max(r2, 0.0) / 0.20
-            )
-            if r2 is not None
-            else None
-        )
-
-        quality = _weighted_available_mean(
-            [
-                (0.70, q_ic),
-                (0.30, q_r2),
-            ]
-        )
-
-        if quality is not None:
-            return _clip_quality(
-                quality
-            )
-
-    ####################################
-    # Binary Targets
-    ####################################
-
-    if statistical_type == "binary":
-
-        roc_auc = _row_metric(
-            row,
-            [
-                "ROC AUC",
-                "ROC-AUC",
-                "AUC ROC",
-                "AUC",
-                "Test ROC AUC",
-            ],
-        )
-
-        pr_auc = _row_metric(
-            row,
-            [
-                "PR AUC",
-                "PR-AUC",
-                "Average Precision",
-                "Average Precision Score",
-                "Test PR AUC",
-            ],
-        )
-
-        positive_rate = _row_metric(
-            row,
-            [
-                "Positive Rate",
-                "Positive Class Rate",
-                "Positive Fraction",
-                "Prevalence",
-                "Base Rate",
-                "Event Rate",
-            ],
-        )
-
-        q_roc = (
-            _clip_quality(
-                (roc_auc - 0.50) / 0.25
-            )
-            if roc_auc is not None
-            else None
-        )
-
-        q_pr = None
-
-        if (
-            pr_auc is not None
-            and positive_rate is not None
-            and 0.0 <= positive_rate < 1.0
-        ):
-
-            # A +0.30 PR-AUC improvement over the random/base-rate
-            # classifier is treated as an excellent result and capped
-            # at 1. This is much fairer for rare-event targets than raw
-            # accuracy or raw PR-AUC.
-            excellent_pr = min(
-                1.0,
-                positive_rate + 0.30,
-            )
-
-            denominator = max(
-                excellent_pr - positive_rate,
-                1e-12,
-            )
-
-            q_pr = _clip_quality(
-                (
-                    pr_auc - positive_rate
-                )
-                / denominator
-            )
-
-        event_types = {
-            "TAIL_EVENT",
-            "VOLATILITY_EVENT",
-            "UPSIDE_EVENT",
-        }
-
-        if portfolio_type in event_types:
-            weights = [
-                (0.40, q_roc),
-                (0.60, q_pr),
-            ]
-        else:
-            weights = [
-                (0.60, q_roc),
-                (0.40, q_pr),
-            ]
-
-        quality = _weighted_available_mean(
-            weights
-        )
-
-        if quality is not None:
-            return _clip_quality(
-                quality
-            )
-
-    ####################################
-    # Multiclass Targets
-    ####################################
-
-    if statistical_type == "multiclass":
-
-        macro_f1 = _row_metric(
-            row,
-            [
-                "Macro F1",
-                "Macro-F1",
-                "F1 Macro",
-                "Macro F1 Score",
-                "Test Macro F1",
-            ],
-        )
-
-        macro_auc = _row_metric(
-            row,
-            [
-                "Macro ROC AUC",
-                "Macro AUC",
-                "OVR Macro AUC",
-                "One Vs Rest Macro AUC",
-                "Multiclass ROC AUC",
-            ],
-        )
-
-        number_classes = _row_metric(
-            row,
-            [
-                "Number Classes",
-                "Number of Classes",
-                "N Classes",
-                "Num Classes",
-            ],
-        )
-
-        if (
-            number_classes is None
-            or number_classes < 2
-        ):
-            number_classes = 3.0
-
-        chance_f1 = 1.0 / number_classes
-        excellent_f1 = 0.70
-
-        q_f1 = None
-
-        if macro_f1 is not None:
-
-            denominator = max(
-                excellent_f1 - chance_f1,
-                1e-12,
-            )
-
-            q_f1 = _clip_quality(
-                (
-                    macro_f1 - chance_f1
-                )
-                / denominator
-            )
-
-        q_auc = (
-            _clip_quality(
-                (macro_auc - 0.50) / 0.25
-            )
-            if macro_auc is not None
-            else None
-        )
-
-        quality = _weighted_available_mean(
-            [
-                (0.70, q_f1),
-                (0.30, q_auc),
-            ]
-        )
-
-        if quality is not None:
-            return _clip_quality(
-                quality
-            )
-
-    ####################################
-    # Fallback
-    ####################################
-
-    # The existing Predictability Score is already the research
-    # pipeline's best summary when the underlying component metrics
-    # are not stored in the SQL table. Keep the pipeline operational
-    # rather than discarding an otherwise valid model.
-    if existing_predictability is not None:
-        return _clip_quality(
-            existing_predictability
-        )
-
-    return 0.0
+sort_ascending = [
+    False,
+]
 
 
-########################################
-# Keep Investigation-Worthy Results
-########################################
+if "Predictability Score" in selected_models_df.columns:
 
-def investigation_worthy_results():
-
-    available = test_results.copy()
-
-    # Remove baseline models.
-    available = available[
-        ~available[
-            "Model"
-        ]
-        .astype(str)
-        .str.contains(
-            "Baseline",
-            case=False,
-            na=False,
-        )
-    ].copy()
-
-    statistical_types = (
-        available[
-            "Target Type"
-        ]
-        .astype(str)
-        .str.lower()
-    )
-
-    thresholds = statistical_types.map(
-        INVESTIGATION_SCORE_THRESHOLDS
-    )
-
-    predictability = pd.to_numeric(
-        available[
-            "Predictability Score"
-        ],
+    selected_models_df["Predictability Score"] = pd.to_numeric(
+        selected_models_df["Predictability Score"],
         errors="coerce",
     )
 
-    available = available[
-        thresholds.notna()
-        & predictability.notna()
-        & (
-            predictability >= thresholds
-        )
-    ].copy()
-
-    if available.empty:
-        raise ValueError(
-            "No investigation-worthy model results "
-            f"are available for {STOCK_TYPE}."
-        )
-
-    # One production model specification per target. If several model
-    # families passed the investigation threshold for the same target,
-    # use the best tested specification according to the existing
-    # Predictability Score.
-    available = (
-        available
-        .sort_values(
-            "Predictability Score",
-            ascending=False,
-        )
-        .drop_duplicates(
-            subset=[
-                "Target",
-            ],
-            keep="first",
-        )
-        .reset_index(
-            drop=True
-        )
+    sort_columns.append(
+        "Predictability Score"
     )
 
-    available[
-        "Portfolio Target Type"
-    ] = available.apply(
-        lambda row: portfolio_target_type(
-            row[
-                "Target"
-            ],
-            row.get(
-                "Prediction Type",
-                "",
-            ),
-        ),
-        axis=1,
-    )
-
-    available[
-        "Horizon"
-    ] = available[
-        "Target"
-    ].map(
-        target_horizon
-    )
-
-    available[
-        "Quality Score"
-    ] = available.apply(
-        lambda row: calculate_quality_score(
-            row,
-            row[
-                "Portfolio Target Type"
-            ],
-        ),
-        axis=1,
-    )
-
-    missing_horizons = available[
-        available[
-            "Horizon"
-        ].isna()
-    ]
-
-    if not missing_horizons.empty:
-        logger.warning(
-            "%d selected targets do not contain a parseable "
-            "numeric horizon. Their Horizon value will be NULL: %s",
-            len(
-                missing_horizons
-            ),
-            ", ".join(
-                missing_horizons[
-                    "Target"
-                ].astype(str)
-            ),
-        )
-
-    return available
-
-
-selected_model_results = (
-    investigation_worthy_results()
-)
-
-
-########################################
-# Selected Target / Feature Union
-########################################
-
-selected_targets = list(
-    dict.fromkeys(
-        selected_model_results[
-            "Target"
-        ].astype(str).tolist()
-    )
-)
-
-
-missing_feature_definitions = [
-    target
-    for target in selected_targets
-    if target not in selected_features
-]
-
-
-if missing_feature_definitions:
-    raise ValueError(
-        "Selected_Features.txt does not contain "
-        "feature definitions for:\n"
-        + "\n".join(
-            missing_feature_definitions
-        )
-    )
-
-
-target_features = {
-    target: list(
-        selected_features[
-            target
-        ]
-    )
-    for target in selected_targets
-}
-
-
-required_features = list(
-    dict.fromkeys(
-        feature
-        for target in selected_targets
-        for feature in target_features[
-            target
-        ]
-    )
-)
-
-
-logger.info(
-    "Selected %d model targets across %d portfolio target types",
-    len(
-        selected_model_results
-    ),
-    selected_model_results[
-        "Portfolio Target Type"
-    ].nunique(),
-)
-
-
-logger.info(
-    "Selected-feature union contains %d unique features",
-    len(
-        required_features
-    ),
-)
-
-
-print(
-    f"\n{'=' * 100}"
-)
-
-print(
-    f"SELECTED MODELS | {STOCK_TYPE}"
-)
-
-print(
-    "=" * 100
-)
-
-print(
-    selected_model_results[
-        [
-            "Target",
-            "Model",
-            "Portfolio Target Type",
-            "Horizon",
-            "Quality Score",
-        ]
-    ].to_string(
-        index=False
-    )
-)
-
-
-########################################
-# Ask For Training / Backtest Data
-########################################
-
-DEFAULT_TRAIN_TOKENS = [
-    "AAPL",
-    "MSFT",
-]
-
-
-DEFAULT_BACKTEST_TOKENS = [
-    "NVDA",
-    "GOOG",
-    "META",
-    "AMZN",
-    "TSLA",
-    "NFLX",
-    "AVGO",
-    "AMD",
-    "JPM",
-    "BAC",
-    "GS",
-    "V",
-    "MA",
-    "WMT",
-    "COST",
-    "KO",
-    "PEP",
-    "MCD",
-    "XOM",
-    "CVX",
-    "CAT",
-    "GE",
-    "BA",
-    "JNJ",
-    "LLY",
-    "UNH",
-    "HD",
-    "DIS",
-]
-
-
-def get_tokens(
-    prompt,
-    default,
-):
-
-    print(
-        "\nDefault:"
-    )
-
-    print(
-        ", ".join(
-            default
-        )
-    )
-
-
-    value = input(
-        f"\n{prompt} "
-        "(comma separated, "
-        "Enter for default): "
-    ).strip()
-
-
-    if not value:
-
-        tokens = (
-            default.copy()
-        )
-
-    else:
-
-        tokens = list(
-            dict.fromkeys(
-                token
-                .strip()
-                .upper()
-
-                for token
-                in value.split(",")
-
-                if token.strip()
-            )
-        )
-
-
-    ####################################
-    # ^GSPC Is Benchmark Only
-    ####################################
-
-    if "^GSPC" in tokens:
-
-        logger.warning(
-            "^GSPC removed from stock universe. "
-            "It is downloaded separately as "
-            "the market benchmark."
-        )
-
-        tokens = [
-            token
-            for token in tokens
-            if token != "^GSPC"
-        ]
-
-
-    if not tokens:
-
-        raise ValueError(
-            "At least one stock ticker "
-            "must be supplied."
-        )
-
-
-    return tokens
-
-
-def get_date(
-    prompt,
-):
-
-    while True:
-
-        value = input(
-            prompt
-        ).strip()
-
-        try:
-
-            return pd.Timestamp(
-                value
-            )
-
-        except Exception:
-
-            print(
-                "Please enter the date "
-                "as YYYY-MM-DD."
-            )
-
-
-########################################
-# Training Questions
-########################################
-
-print(
-    "\n"
-    + "=" * 70
-)
-
-print(
-    "TRAINING DATA"
-)
-
-print(
-    "=" * 70
-)
-
-
-train_tokens = get_tokens(
-    "Training tickers:",
-    DEFAULT_TRAIN_TOKENS,
-)
-
-
-train_start = get_date(
-    "Training start date "
-    "(YYYY-MM-DD): "
-)
-
-
-train_end = get_date(
-    "Training end date   "
-    "(YYYY-MM-DD): "
-)
-
-
-if train_end <= train_start:
-
-    raise ValueError(
-        "Training end date must be "
-        "after training start date."
-    )
-
-
-########################################
-# Backtest Questions
-########################################
-
-print(
-    "\n"
-    + "=" * 70
-)
-
-print(
-    "BACKTEST DATA"
-)
-
-print(
-    "=" * 70
-)
-
-
-backtest_tokens = get_tokens(
-    "Backtest tickers:",
-    DEFAULT_BACKTEST_TOKENS,
-)
-
-
-backtest_start = get_date(
-    "Backtest start date "
-    "(YYYY-MM-DD): "
-)
-
-
-backtest_end = get_date(
-    "Backtest end date   "
-    "(YYYY-MM-DD): "
-)
-
-
-if backtest_end <= backtest_start:
-
-    raise ValueError(
-        "Backtest end date must be "
-        "after backtest start date."
-    )
-
-
-if backtest_start < train_end:
-
-    raise ValueError(
-        "\nBacktest period overlaps "
-        "the training period.\n"
-        f"Training ends: "
-        f"{train_end.date()}\n"
-        f"Backtest starts: "
-        f"{backtest_start.date()}"
-    )
-
-
-########################################
-# Rebalance Question
-########################################
-
-rebalance_input = input(
-    f"Rebalance every N trading days "
-    f"[{DEFAULT_REBALANCE_EVERY}]: "
-).strip()
-
-
-DEFAULT_REBALANCE = (
-    int(
-        rebalance_input
-    )
-    if rebalance_input
-    else DEFAULT_REBALANCE_EVERY
-)
-
-
-if DEFAULT_REBALANCE <= 0:
-
-    raise ValueError(
-        "Rebalance frequency must be "
-        "greater than zero."
-    )
-
-
-########################################
-# ONE Yfinance Download
-########################################
-
-all_tokens = list(
-    dict.fromkeys(
-        train_tokens
-        + backtest_tokens
-    )
-)
-
-
-download_start = (
-    min(
-        train_start,
-        backtest_start,
-    )
-    - pd.DateOffset(
-        years=FEATURE_WARMUP_YEARS
-    )
-)
-
-
-download_end = (
-    max(
-        train_end,
-        backtest_end,
-    )
-    + pd.Timedelta(
-        days=1
-    )
-)
-
-
-symbols = list(
-    dict.fromkeys(
-        all_tokens
-        + [
-            "^GSPC"
-        ]
-    )
-)
-
-
-logger.info(
-    "Downloading %d stocks + S&P 500 "
-    "in one yfinance call",
-    len(
-        all_tokens
-    ),
-)
-
-
-raw_download = yf.download(
-    symbols,
-    start=download_start.strftime(
-        "%Y-%m-%d"
-    ),
-    end=download_end.strftime(
-        "%Y-%m-%d"
-    ),
-    auto_adjust=True,
-    progress=False,
-    group_by="ticker",
-    multi_level_index=True,
-)
-
-
-if raw_download.empty:
-
-    raise ValueError(
-        "yfinance returned no data."
-    )
-
-
-downloaded_symbols = set(
-    raw_download
-    .columns
-    .get_level_values(0)
-)
-
-
-if "^GSPC" not in downloaded_symbols:
-
-    raise ValueError(
-        "S&P 500 (^GSPC) was not "
-        "returned by yfinance."
-    )
-
-
-market_df = (
-    raw_download[
-        "^GSPC"
-    ]
-    .copy()
-    .dropna(
-        how="all"
-    )
-)
-
-
-market_df.index = pd.to_datetime(
-    market_df.index
-)
-
-
-########################################
-# Efficient Feature Generation
-########################################
-
-def selected_features_complete(
-    dataframe,
-):
-
-    return set(
-        required_features
-    ).issubset(
-        dataframe.columns
-    )
-
-
-def build_individual_features(
-    stock_df,
-    benchmark_df,
-):
-
-    stock_df = (
-        stock_df.copy()
-    )
-
-
-    stock_df[
-        "Return"
-    ] = (
-        stock_df[
-            "Close"
-        ]
-        .pct_change()
-    )
-
-
-    ####################################
-    # Same Dependency Order As Research
-    ####################################
-
-    feature_steps = [
-        (
-            "return",
-            lambda x:
-                all_return_features(x),
-        ),
-        (
-            "momentum",
-            lambda x:
-                all_momentum_features(x),
-        ),
-        (
-            "volatility",
-            lambda x:
-                all_volatility_features(x),
-        ),
-        (
-            "range volatility",
-            lambda x:
-                all_range_volatility_features(x),
-        ),
-        (
-            "trend",
-            lambda x:
-                all_trend_features(x),
-        ),
-        (
-            "moving average",
-            lambda x:
-                all_moving_average_features(x),
-        ),
-        (
-            "drawdown",
-            lambda x:
-                all_drawdown_features(x),
-        ),
-        (
-            "distribution",
-            lambda x:
-                all_distribution_features(x),
-        ),
-        (
-            "tail risk",
-            lambda x:
-                all_tail_risk_features(x),
-        ),
-        (
-            "volume",
-            lambda x:
-                all_volume_features(x),
-        ),
-        (
-            "liquidity",
-            lambda x:
-                all_liquidity_features(x),
-        ),
-        (
-            "ohlc",
-            lambda x:
-                all_ohlc_features(x),
-        ),
-        (
-            "market relative",
-            lambda x:
-                all_market_relative_features(
-                    x,
-                    market_df=benchmark_df,
-                ),
-        ),
-        (
-            "beta",
-            lambda x:
-                all_beta_features(
-                    x,
-                    market_df=benchmark_df,
-                ),
-        ),
-        (
-            "correlation",
-            lambda x:
-                all_correlation_features(
-                    x,
-                    market_df=benchmark_df,
-                ),
-        ),
-        (
-            "residual",
-            lambda x:
-                all_residual_features(
-                    x,
-                    market_df=benchmark_df,
-                ),
-        ),
-        (
-            "technical",
-            lambda x:
-                all_technical_features(x),
-        ),
-        (
-            "regime",
-            lambda x:
-                all_regime_features(x),
-        ),
-        (
-            "interaction",
-            lambda x:
-                all_interaction_features(x),
-        ),
-        (
-            "composite",
-            lambda x:
-                all_composite_features(x),
-        ),
-        (
-            "experimental",
-            lambda x:
-                all_experimental_features(x),
-        ),
-    ]
-
-
-    for (
-        step_name,
-        feature_function,
-    ) in feature_steps:
-
-        if selected_features_complete(
-            stock_df
-        ):
-
-            logger.debug(
-                "Feature union complete; "
-                "stopping before %s",
-                step_name,
-            )
-
-            break
-
-
-        stock_df = (
-            feature_function(
-                stock_df
-            )
-        )
-
-
-    return stock_df
-
-
-def add_cross_stock_features_if_needed(
-    panel,
-):
-
-    if selected_features_complete(
-        panel
-    ):
-
-        return panel
-
-
-    base_columns = {
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-        "Return",
-        "Ticker",
-        "Date",
-    }
-
-
-    ####################################
-    # Cross-Sectional Features
-    ####################################
-
-    if (
-        panel[
-            "Ticker"
-        ]
-        .nunique()
-        > 1
-    ):
-
-        logger.info(
-            "Selected union requires "
-            "cross-sectional features"
-        )
-
-
-        individual_feature_columns = [
-            column
-            for column
-            in panel.columns
-            if column
-            not in base_columns
-        ]
-
-
-        panel = (
-            all_cross_sectional_features(
-                panel,
-                columns=(
-                    individual_feature_columns
-                ),
-                date_col="Date",
-            )
-        )
-
-
-    if selected_features_complete(
-        panel
-    ):
-
-        return panel
-
-
-    ####################################
-    # Breadth / Dispersion Features
-    ####################################
-
-    if (
-        panel[
-            "Ticker"
-        ]
-        .nunique()
-        <= 1
-    ):
-
-        return panel
-
-
-    logger.info(
-        "Selected union requires "
-        "breadth / dispersion features"
-    )
-
-
-    wide_df = panel.pivot(
-        index="Date",
-        columns="Ticker",
-        values=[
-            "Open",
-            "High",
-            "Low",
-            "Close",
-            "Volume",
-            "Return",
-        ],
-    )
-
-
-    original_num_columns = len(
-        wide_df.columns
-    )
-
-
-    market_features = (
-        all_breadth_features(
-            wide_df.copy()
-        )
-    )
-
-
-    market_features = (
-        all_dispersion_features(
-            market_features
-        )
-    )
-
-
-    new_market_features = (
-        market_features
-        .iloc[
-            :,
-            original_num_columns:
-        ]
-        .copy()
-    )
-
-
-    new_market_features.columns = [
-        column[0]
-        if isinstance(
-            column,
-            tuple,
-        )
-        else column
-
-        for column
-        in new_market_features.columns
-    ]
-
-
-    new_market_features = (
-        new_market_features.loc[
-            :,
-            ~new_market_features
-            .columns
-            .duplicated()
-        ]
-    )
-
-
-    new_market_features = (
-        new_market_features
-        .reset_index()
-    )
-
-
-    panel = panel.merge(
-        new_market_features,
-        on="Date",
-        how="left",
-    )
-
-
-    return panel
-
-
-def build_feature_panel(
-    universe,
-    start_date,
-    end_date,
-    panel_name,
-):
-
-    logger.info(
-        "Building %s feature panel "
-        "for %d requested stocks",
-        panel_name,
-        len(
-            universe
-        ),
-    )
-
-
-    warmup_start = (
-        start_date
-        - pd.DateOffset(
-            years=FEATURE_WARMUP_YEARS
-        )
-    )
-
-
-    benchmark_slice = market_df[
-        (
-            market_df.index
-            >= warmup_start
-        )
-        &
-        (
-            market_df.index
-            <= end_date
-        )
-    ].copy()
-
-
-    stock_dfs = {}
-
-
-    for token in universe:
-
-        if token not in downloaded_symbols:
-
-            logger.warning(
-                "%s skipped: not returned "
-                "by yfinance",
-                token,
-            )
-
-            continue
-
-
-        stock_df = (
-            raw_download[
-                token
-            ]
-            .copy()
-            .dropna(
-                how="all"
-            )
-        )
-
-
-        stock_df.index = (
-            pd.to_datetime(
-                stock_df.index
-            )
-        )
-
-
-        stock_df = stock_df[
-            (
-                stock_df.index
-                >= warmup_start
-            )
-            &
-            (
-                stock_df.index
-                <= end_date
-            )
-        ].copy()
-
-
-        if stock_df.empty:
-
-            logger.warning(
-                "%s skipped: no observations "
-                "inside required range",
-                token,
-            )
-
-            continue
-
-
-        logger.info(
-            "%s | %s feature generation",
-            panel_name,
-            token,
-        )
-
-
-        stock_df = (
-            build_individual_features(
-                stock_df,
-                benchmark_slice,
-            )
-        )
-
-
-        stock_dfs[
-            token
-        ] = stock_df
-
-
-    usable_tokens = [
-        token
-        for token
-        in universe
-        if token
-        in stock_dfs
-    ]
-
-
-    if not usable_tokens:
-
-        raise ValueError(
-            f"No stocks remain in "
-            f"{panel_name} universe."
-        )
-
-
-    panel_parts = []
-
-
-    for token in usable_tokens:
-
-        stock_df = (
-            stock_dfs[
-                token
-            ]
-            .copy()
-        )
-
-
-        stock_df[
-            "Ticker"
-        ] = token
-
-
-        stock_df[
-            "Date"
-        ] = (
-            stock_df.index
-        )
-
-
-        panel_parts.append(
-            stock_df
-            .reset_index(
-                drop=True
-            )
-        )
-
-
-    panel = pd.concat(
-        panel_parts,
-        ignore_index=True,
-    )
-
-
-    panel = (
-        add_cross_stock_features_if_needed(
-            panel
-        )
-    )
-
-
-    missing_features = [
-        feature
-        for feature
-        in required_features
-        if feature
-        not in panel.columns
-    ]
-
-
-    if missing_features:
-
-        raise ValueError(
-            f"\n{panel_name} feature pipeline "
-            "could not create:\n"
-            + "\n".join(
-                missing_features
-            )
-        )
-
-
-    ####################################
-    # Keep Only Base + Required Union
-    ####################################
-
-    columns_to_keep = list(
-        dict.fromkeys(
-            [
-                "Date",
-                "Ticker",
-                "Open",
-                "High",
-                "Low",
-                "Close",
-                "Volume",
-                "Return",
-            ]
-            + required_features
-        )
-    )
-
-
-    panel = (
-        panel[
-            columns_to_keep
-        ]
-        .copy()
-    )
-
-
-    panel[
-        "Date"
-    ] = pd.to_datetime(
-        panel[
-            "Date"
-        ]
-    )
-
-
-    panel[
-        required_features
-    ] = (
-        panel[
-            required_features
-        ]
-        .replace(
-            [
-                np.inf,
-                -np.inf,
-            ],
-            np.nan,
-        )
-    )
-
-
-    ####################################
-    # Remove Warm-Up Rows
-    ####################################
-
-    panel = panel[
-        (
-            panel[
-                "Date"
-            ]
-            >= start_date
-        )
-        &
-        (
-            panel[
-                "Date"
-            ]
-            <= end_date
-        )
-    ].copy()
-
-
-    return (
-        panel,
-        usable_tokens,
-    )
-
-
-########################################
-# Build Training Features
-########################################
-
-training_features_df, train_tokens = (
-    build_feature_panel(
-        universe=train_tokens,
-        start_date=train_start,
-        end_date=train_end,
-        panel_name="TRAINING",
-    )
-)
-
-
-########################################
-# Build Backtest Features
-########################################
-
-backtest_features_df, backtest_tokens = (
-    build_feature_panel(
-        universe=backtest_tokens,
-        start_date=backtest_start,
-        end_date=backtest_end,
-        panel_name="BACKTEST",
-    )
-)
-
-
-########################################
-# Selected Target Generation
-########################################
-
-def add_selected_targets(
-    feature_df,
-    universe,
-    split_end,
-    panel_name,
-):
-
-    logger.info(
-        "Generating selected %s targets",
-        panel_name,
-    )
-
-
-    target_parts = []
-
-
-    benchmark_slice = (
-        market_df[
-            market_df.index
-            <= split_end
-        ]
-        .copy()
-    )
-
-
-    for token in universe:
-
-        token_df = (
-            feature_df[
-                feature_df[
-                    "Ticker"
-                ]
-                == token
-            ]
-            .sort_values(
-                "Date"
-            )
-            .copy()
-        )
-
-
-        if token_df.empty:
-            continue
-
-
-        token_df = (
-            token_df
-            .set_index(
-                "Date"
-            )
-        )
-
-
-        if (
-            "Ticker"
-            in token_df.columns
-        ):
-
-            token_df = (
-                token_df.drop(
-                    columns=[
-                        "Ticker"
-                    ]
-                )
-            )
-
-
-        ####################################
-        # Same Target Order As Research
-        ####################################
-
-        target_steps = [
-            (
-                "return",
-                lambda x:
-                    all_return_targets(
-                        x,
-                        benchmark_df=(
-                            benchmark_slice
-                        ),
-                    ),
-            ),
-            (
-                "volatility",
-                lambda x:
-                    all_volatility_targets(x),
-            ),
-            (
-                "direction",
-                lambda x:
-                    all_direction_targets(x),
-            ),
-            (
-                "barrier",
-                lambda x:
-                    all_barrier_targets(x),
-            ),
-            (
-                "excursion",
-                lambda x:
-                    all_excursion_targets(x),
-            ),
-            (
-                "drawdown",
-                lambda x:
-                    all_drawdown_targets(x),
-            ),
-            (
-                "risk adjusted",
-                lambda x:
-                    all_risk_adjusted_targets(x),
-            ),
-        ]
-
-
-        for (
-            step_name,
-            target_function,
-        ) in target_steps:
-
-            present = set(
-                selected_targets
-            ).intersection(
-                token_df.columns
-            )
-
-
-            if (
-                len(
-                    present
-                )
-                == len(
-                    selected_targets
-                )
-            ):
-
-                break
-
-
-            logger.debug(
-                "%s | %s targets",
-                token,
-                step_name,
-            )
-
-
-            token_df = (
-                target_function(
-                    token_df
-                )
-            )
-
-
-        token_df[
-            "Ticker"
-        ] = token
-
-
-        token_df[
-            "Date"
-        ] = (
-            token_df.index
-        )
-
-
-        available_selected = [
-            target
-            for target
-            in selected_targets
-            if target
-            in token_df.columns
-        ]
-
-
-        target_parts.append(
-            token_df[
-                [
-                    "Date",
-                    "Ticker",
-                    "Close",
-                ]
-                + available_selected
-            ]
-            .reset_index(
-                drop=True
-            )
-        )
-
-
-    if not target_parts:
-
-        raise ValueError(
-            f"No {panel_name} target "
-            "data could be generated."
-        )
-
-
-    target_panel = pd.concat(
-        target_parts,
-        ignore_index=True,
-    )
-
-
-    missing_targets = [
-        target
-        for target
-        in selected_targets
-        if target
-        not in target_panel.columns
-    ]
-
-
-    ####################################
-    # Cross-Sectional Ranking Targets
-    ####################################
-
-    if missing_targets:
-
-        logger.info(
-            "%s has selected targets not "
-            "created individually; trying "
-            "ranking targets",
-            panel_name,
-        )
-
-
-        ranking_input = (
-            feature_df[
-                [
-                    "Date",
-                    "Ticker",
-                    "Close",
-                ]
-            ]
-            .copy()
-        )
-
-
-        ranking_input = (
-            all_ranking_targets(
-                ranking_input,
-                ticker_col="Ticker",
-                date_col="Date",
-                price_col="Close",
-            )
-        )
-
-
-        ranking_available = [
-            target
-            for target
-            in missing_targets
-            if target
-            in ranking_input.columns
-        ]
-
-
-        if ranking_available:
-
-            ranking_targets = (
-                ranking_input[
-                    [
-                        "Date",
-                        "Ticker",
-                    ]
-                    + ranking_available
-                ]
-                .copy()
-            )
-
-
-            target_panel = (
-                target_panel.merge(
-                    ranking_targets,
-                    on=[
-                        "Date",
-                        "Ticker",
-                    ],
-                    how="left",
-                )
-            )
-
-
-    missing_targets = [
-        target
-        for target
-        in selected_targets
-        if target
-        not in target_panel.columns
-    ]
-
-
-    if missing_targets:
-
-        raise ValueError(
-            f"\nCould not recreate selected "
-            f"{panel_name} targets:\n"
-            + "\n".join(
-                missing_targets
-            )
-        )
-
-
-    target_panel = (
-        target_panel[
-            [
-                "Date",
-                "Ticker",
-            ]
-            + selected_targets
-        ]
-        .copy()
-    )
-
-
-    result = (
-        feature_df.merge(
-            target_panel,
-            on=[
-                "Date",
-                "Ticker",
-            ],
-            how="left",
-        )
-    )
-
-
-    return result
-
-
-########################################
-# Build Targets For BOTH Splits
-########################################
-
-training_df = (
-    add_selected_targets(
-        feature_df=(
-            training_features_df
-        ),
-        universe=train_tokens,
-        split_end=train_end,
-        panel_name="TRAINING",
-    )
-)
-
-
-backtest_df = (
-    add_selected_targets(
-        feature_df=(
-            backtest_features_df
-        ),
-        universe=backtest_tokens,
-        split_end=backtest_end,
-        panel_name="BACKTEST",
-    )
-)
-
-
-training_df[
-    "Split"
-] = "TRAIN"
-
-
-backtest_df[
-    "Split"
-] = "BACKTEST"
-
-
-model_data = pd.concat(
-    [
-        training_df,
-        backtest_df,
-    ],
-    ignore_index=True,
-)
-
-
-########################################
-# Build Selected Model Metadata
-########################################
-
-def _clean_parameters(
-    parameters,
-):
-
-    if (
-        parameters is None
-        or (
-            isinstance(
-                parameters,
-                float,
-            )
-            and pd.isna(
-                parameters
-            )
-        )
-    ):
-        return "{}"
-
-    return str(
-        parameters
+    sort_ascending.append(
+        False
     )
 
 
 selected_models_df = (
-    selected_model_results[
-        [
-            "Target",
-            "Model",
-            "Parameters",
-            "Portfolio Target Type",
-            "Horizon",
-            "Quality Score",
-        ]
-    ]
-    .copy()
-    .rename(
-        columns={
-            "Portfolio Target Type":
-                "Target Type",
-        }
+    selected_models_df
+    .sort_values(
+        sort_columns,
+        ascending=sort_ascending,
     )
+    .drop_duplicates(
+        subset=[
+            "Target",
+        ],
+        keep="first",
+    )
+    .reset_index(drop=True)
 )
 
 
-selected_models_df[
-    "Parameters"
-] = selected_models_df[
-    "Parameters"
-].map(
-    _clean_parameters
+# main_package expects Target Type to contain the portfolio role and
+# Statistical Type to contain continuous/binary/multiclass.
+selected_models_df["Statistical Type"] = (
+    selected_models_df["Target Type"]
+    .astype(str)
+    .str.lower()
+    .str.strip()
 )
 
 
-selected_models_df[
-    "Quality Score"
-] = pd.to_numeric(
-    selected_models_df[
-        "Quality Score"
-    ],
-    errors="coerce",
-).clip(
-    lower=0.0,
-    upper=1.0,
+selected_models_df["Target Type"] = (
+    selected_models_df["Portfolio Target Type"]
+    .astype(str)
+    .str.upper()
+    .str.strip()
 )
 
 
-# Keep exactly the requested public metadata format.
+# Horizon scores are not needed to create Adjusted Signal. The value is
+# required by main_package and can be replaced later by optimized scores.
+selected_models_df["Horizon Score"] = 1.0
+
+
 selected_models_df = selected_models_df[
     [
         "Target",
         "Model",
         "Parameters",
         "Target Type",
+        "Statistical Type",
+        "Portfolio Target Type",
         "Horizon",
+        "Horizon Score",
         "Quality Score",
     ]
 ].copy()
 
 
-# Separate helper table preserves the target-specific feature list
-# without adding extra columns to Selected Models {STOCK_TYPE}.
-selected_model_features_df = pd.DataFrame(
-    [
-        {
-            "Target": target,
-            "Features": json.dumps(
-                target_features[
-                    target
-                ]
-            ),
-        }
-        for target in selected_targets
+if selected_models_df.empty:
+    raise ValueError(
+        "No selected production models remain."
+    )
+
+
+########################################
+# Validate Targets And Selected Features
+########################################
+
+target_features = {}
+invalid_targets = []
+
+
+for _, model_row in selected_models_df.iterrows():
+
+    target = str(model_row["Target"])
+
+    if target not in stocks.columns:
+        invalid_targets.append(
+            f"{target}: target column missing"
+        )
+        continue
+
+    features = list(
+        selected_features.get(target, [])
+    )
+
+    missing_features = [
+        feature
+        for feature in features
+        if feature not in stocks.columns
     ]
+
+    if not features:
+        invalid_targets.append(
+            f"{target}: no selected features"
+        )
+        continue
+
+    if missing_features:
+        invalid_targets.append(
+            f"{target}: missing features {missing_features}"
+        )
+        continue
+
+    target_features[target] = features
+
+
+if invalid_targets:
+    raise ValueError(
+        "stocks cannot support the selected models:\n"
+        + "\n".join(invalid_targets)
+    )
+
+
+logger.info(
+    "Selected models ready | targets=%d | portfolio types=%d",
+    len(selected_models_df),
+    selected_models_df["Target Type"].nunique(),
 )
 
 
-required_features_df = pd.DataFrame(
-    {
-        "Feature Order":
-            range(
-                len(
-                    required_features
+########################################
+# Helpers
+########################################
+
+def dataframe_memory_mb(dataframe):
+
+    return (
+        dataframe
+        .memory_usage(
+            index=True,
+            deep=True,
+        )
+        .sum()
+        / (1024 ** 2)
+    )
+
+
+def horizon_key(row):
+
+    return f"{int(float(row['Horizon']))}d"
+
+
+def purged_training_end(
+    requested_train_end,
+    backtest_start,
+    horizon,
+    available_dates,
+):
+
+    available_dates = pd.Series(
+        pd.to_datetime(available_dates)
+    ).drop_duplicates().sort_values().reset_index(drop=True)
+
+    backtest_positions = available_dates.index[
+        available_dates >= pd.Timestamp(backtest_start)
+    ]
+
+    if len(backtest_positions) == 0:
+        raise ValueError(
+            "Backtest start is outside the available stock dates."
+        )
+
+    backtest_position = int(
+        backtest_positions[0]
+    )
+
+    cutoff_position = (
+        backtest_position
+        - int(horizon)
+        - 1
+    )
+
+    if cutoff_position < 0:
+        raise ValueError(
+            f"Not enough data to purge a {int(horizon)}-day target."
+        )
+
+    leakage_safe_cutoff = available_dates.iloc[
+        cutoff_position
+    ]
+
+    return min(
+        pd.Timestamp(requested_train_end),
+        pd.Timestamp(leakage_safe_cutoff),
+    )
+
+
+def apply_horizon_signal_refresh(
+    predictions_df,
+    rebalance_multiplier,
+):
+
+    if not (
+        0 < rebalance_multiplier <= 1
+    ):
+        raise ValueError(
+            "rebalance_multiplier must be greater than 0 and no greater than 1."
+        )
+
+    required_columns = {
+        "Date",
+        "Ticker",
+        "Portfolio Target Type",
+        "Horizon Key",
+        "Signal",
+    }
+
+    missing_columns = (
+        required_columns
+        - set(predictions_df.columns)
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Missing required columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+    refreshed = (
+        predictions_df
+        .copy()
+        .sort_values(
+            [
+                "Ticker",
+                "Portfolio Target Type",
+                "Horizon Key",
+                "Date",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+    group_columns = [
+        "Ticker",
+        "Portfolio Target Type",
+        "Horizon Key",
+    ]
+
+    for group_values, group_indexes in refreshed.groupby(
+        group_columns,
+        sort=False,
+    ).groups.items():
+
+        ticker, portfolio_type, horizon = group_values
+        horizon = str(horizon).strip().lower()
+
+        if not horizon.endswith("d"):
+            raise ValueError(
+                f"Daily Horizon Key must end in 'd'. Received {horizon!r} "
+                f"for {ticker!r} / {portfolio_type!r}."
+            )
+
+        horizon_days = int(
+            horizon[:-1]
+        )
+
+        refresh_rows = max(
+            1,
+            int(
+                np.ceil(
+                    rebalance_multiplier
+                    * horizon_days
                 )
             ),
+        )
 
-        "Feature":
-            required_features,
-    }
+        group_indexes = np.asarray(
+            list(group_indexes)
+        )
+
+        original_signals = refreshed.loc[
+            group_indexes,
+            "Signal",
+        ].to_numpy()
+
+        row_positions = np.arange(
+            len(original_signals)
+        )
+
+        refresh_start_positions = (
+            row_positions
+            // refresh_rows
+        ) * refresh_rows
+
+        refreshed.loc[
+            group_indexes,
+            "Signal",
+        ] = original_signals[
+            refresh_start_positions
+        ]
+
+    return (
+        refreshed
+        .sort_values(
+            [
+                "Date",
+                "Ticker",
+                "Portfolio Target Type",
+                "Horizon Key",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+
+########################################
+# Fit Each Selected Model On All Stocks
+# And Predict The Requested Backtest
+########################################
+
+all_stock_dates = (
+    stocks["Date"]
+    .drop_duplicates()
+    .sort_values()
+    .reset_index(drop=True)
+)
+
+
+prediction_parts = []
+model_summaries = []
+skipped_model_parts = []
+
+
+for model_number, (_, model_row) in enumerate(
+    selected_models_df.iterrows(),
+    start=1,
+):
+
+    target = str(
+        model_row["Target"]
+    )
+
+    features = target_features[target]
+    horizon = int(
+        float(model_row["Horizon"])
+    )
+
+    actual_train_end = purged_training_end(
+        requested_train_end=TRAIN_END,
+        backtest_start=BACKTEST_START,
+        horizon=horizon,
+        available_dates=all_stock_dates,
+    )
+
+
+    logger.info(
+        "[%d/%d] %s | features=%d | requested train end=%s | "
+        "purged train end=%s | backtest=%s to %s",
+        model_number,
+        len(selected_models_df),
+        target,
+        len(features),
+        TRAIN_END.date(),
+        actual_train_end.date(),
+        BACKTEST_START.date(),
+        BACKTEST_END.date(),
+    )
+
+    columns = list(
+        dict.fromkeys(
+            [
+                "Date",
+                "Ticker",
+                "Close",
+                "Return",
+                target,
+            ]
+            + features
+        )
+    )
+
+    target_data = stocks[
+        columns
+    ].copy()
+
+    train_mask = (
+        target_data["Date"]
+        <= actual_train_end
+    )
+
+    backtest_mask = target_data["Date"].between(
+        BACKTEST_START,
+        BACKTEST_END,
+        inclusive="both",
+    )
+
+    target_data = target_data[
+        train_mask
+        | backtest_mask
+    ].copy()
+
+    target_data["Split"] = np.where(
+        target_data["Date"] <= actual_train_end,
+        "TRAIN",
+        "BACKTEST",
+    )
+
+    one_model_df = pd.DataFrame(
+        [
+            model_row.to_dict()
+        ]
+    )
+
+    prepared = create_models_and_predictions(
+        dataframe=target_data,
+        selected_models_df=one_model_df,
+        model_features={
+            target: features,
+        },
+        strict=True,
+    )
+
+    target_predictions = prepared[
+        "predictions"
+    ].copy()
+
+    target_predictions[
+        "Portfolio Target Type"
+    ] = model_row[
+        "Portfolio Target Type"
+    ]
+
+    prediction_parts.append(
+        target_predictions
+    )
+
+    model_summaries.append(
+        prepared["model_summary"]
+    )
+
+    if not prepared["skipped_models"].empty:
+        skipped_model_parts.append(
+            prepared["skipped_models"]
+        )
+
+    logger.info(
+        "[%d/%d] %s | predictions complete | rows=%d",
+        model_number,
+        len(selected_models_df),
+        target,
+        len(target_predictions),
+    )
+
+    del target_data
+    del one_model_df
+    del prepared
+    del target_predictions
+
+    gc.collect()
+
+
+if not prediction_parts:
+    raise ValueError(
+        "No selected target predictions were generated."
+    )
+
+
+predictions_df = pd.concat(
+    prediction_parts,
+    ignore_index=True,
+    sort=False,
+)
+
+
+model_summary_df = pd.concat(
+    model_summaries,
+    ignore_index=True,
+    sort=False,
+)
+
+
+skipped_models_df = (
+    pd.concat(
+        skipped_model_parts,
+        ignore_index=True,
+        sort=False,
+    )
+    if skipped_model_parts
+    else pd.DataFrame()
+)
+
+
+del prediction_parts
+del model_summaries
+del skipped_model_parts
+
+
+logger.info(
+    "Prediction generation complete | rows=%d | targets=%d | %.1f MB",
+    len(predictions_df),
+    predictions_df["Target"].nunique(),
+    dataframe_memory_mb(predictions_df),
+)
+
+selected_model_targets = (
+    selected_models_df["Target"]
+    .astype(str)
+    .drop_duplicates()
+    .tolist()
+)
+
+########################################
+# Training Data
+########################################
+
+train_df = stocks[
+    stocks["Date"]
+    <= actual_train_end
+].copy()
+
+
+logger.info(
+    "Training target data prepared | rows=%d | targets=%d | end=%s",
+    len(train_df),
+    len(selected_model_targets),
+    pd.Timestamp(actual_train_end).date(),
+)
+
+
+train_df[
+    selected_model_targets
+] = (
+    train_df[
+        selected_model_targets
+    ]
+    .apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
 )
 
 
 ########################################
-# Configuration Metadata
+# Target Mean And Standard Deviation
 ########################################
 
-config = {
-    "stock_type":
-        STOCK_TYPE,
+target_metrics = (
+    train_df[
+        selected_model_targets
+    ]
+    .agg(
+        [
+            "mean",
+            "std",
+        ]
+    )
+    .T
+    .rename(
+        columns={
+            "mean": "Mean",
+            "std": "Std",
+        }
+    )
+)
 
-    "stock_type_index":
-        str(
-            stock_type_index
-        ),
 
-    "train_tokens":
-        json.dumps(
-            train_tokens
-        ),
+target_metrics.index.name = "Target"
 
-    "backtest_tokens":
-        json.dumps(
-            backtest_tokens
-        ),
 
-    "train_start":
-        str(
-            train_start.date()
-        ),
+logger.info(
+    "Target statistics calculated | targets=%d | missing means=%d | missing stds=%d",
+    len(target_metrics),
+    int(target_metrics["Mean"].isna().sum()),
+    int(target_metrics["Std"].isna().sum()),
+)
 
-    "train_end":
-        str(
-            train_end.date()
-        ),
 
-    "backtest_start":
-        str(
-            backtest_start.date()
-        ),
+########################################
+# Target Orientation
+########################################
 
-    "backtest_end":
-        str(
-            backtest_end.date()
-        ),
+TARGET_ORIENTATION = {
+    "Forward Return": 1,
+    "Forward Log Return": 1,
+    "Forward Excess Return": 1,
 
-    "default_rebalance_every":
-        str(
-            DEFAULT_REBALANCE
-        ),
+    "Future Volatility": -1,
+    "Future Variance": -1,
+    "Future Upside Volatility": 1,
+    "Future Downside Volatility": -1,
+    "Future Downside Upside Volatility Ratio": -1,
 
-    "feature_warmup_years":
-        str(
-            FEATURE_WARMUP_YEARS
-        ),
+    "Future Mean Absolute Return": 1,
+    "Future Maximum Absolute Return": 1,
 
-    "selected_feature_count":
-        str(
-            len(
-                required_features
-            )
-        ),
+    "Future Direction": 1,
 
-    "selected_model_count":
-        str(
-            len(
-                selected_models_df
-            )
-        ),
+    "Future Return Above 1 Percent": 1,
+    "Future Return Above 2 Percent": 1,
+    "Future Return Above 5 Percent": 1,
+    "Future Return Above 10 Percent": 1,
 
-    "selected_models_table":
-        SELECTED_MODELS_TABLE,
+    "Three Class Direction 2 Percent": 1,
+    "Three Class Direction 5 Percent": 1,
 
-    "selected_model_features_table":
-        SELECTED_MODEL_FEATURES_TABLE,
+    "Barrier 2.0 -2.0": 1,
+    "Barrier 2.0 -5.0": 1,
+    "Barrier 5.0 -2.0": 1,
+    "Barrier 5.0 -5.0": 1,
 
-    "database_created_at":
-        str(
-            pd.Timestamp.now()
-        ),
+    "Volatility Barrier 20 1 1": -1,
+    "Volatility Barrier 20 1 2": -1,
+    "Volatility Barrier 20 2 1": -1,
+    "Volatility Barrier 20 2 2": -1,
+    "Volatility Barrier 60 1 1": -1,
+    "Volatility Barrier 60 1 2": -1,
+    "Volatility Barrier 60 2 1": -1,
+    "Volatility Barrier 60 2 2": -1,
+
+    "Maximum Favourable Excursion": 1,
+    "Maximum Adverse Excursion": 1,
+
+    "Time To Maximum Favourable Excursion": -1,
+    "Time To Maximum Adverse Excursion": 1,
+
+    "Future Maximum Drawdown": 1,
+    "Future Minimum Return": 1,
+
+    "Future Return Volatility Ratio": 1,
+    "Future Sortino Ratio": 1,
+    "Future Return Minus Risk 0.5": 1,
+    "Future Return Minus Risk 1": 1,
+    "Future Return Minus Risk 2": 1,
+    "Future Return Drawdown Ratio": 1,
+
+    "Future Return Rank": 1,
+
+    "Top 20 Percent Future Return": 1,
+    "Top 25 Percent Future Return": 1,
+    "Bottom 20 Percent Future Return": -1,
+    "Bottom 25 Percent Future Return": -1,
 }
 
 
-config_df = pd.DataFrame(
-    {
-        "Key":
-            list(
-                config.keys()
-            ),
+########################################
+# Match Target With Orientation
+########################################
 
-        "Value":
-            list(
-                config.values()
-            ),
-    }
+def get_target_orientation(
+    target,
+):
+    target_tokens = str(
+        target
+    ).lower().split()
+
+    matches = []
+
+
+    for base_target, orientation in (
+        TARGET_ORIENTATION.items()
+    ):
+
+        base_tokens = (
+            base_target
+            .lower()
+            .split()
+        )
+
+        target_iterator = iter(
+            target_tokens
+        )
+
+        is_match = all(
+            any(
+                target_token
+                == base_token
+                for target_token
+                in target_iterator
+            )
+            for base_token
+            in base_tokens
+        )
+
+        if is_match:
+
+            matches.append(
+                (
+                    len(base_tokens),
+                    orientation,
+                    base_target,
+                )
+            )
+
+
+    if not matches:
+
+        raise KeyError(
+            "No TARGET_ORIENTATION entry "
+            f"matched target: {target}"
+        )
+
+
+    # Use the longest and therefore most specific match.
+    _, orientation, _ = max(
+        matches,
+        key=lambda value: value[0],
+    )
+
+    return orientation
+
+
+########################################
+# Final Target Values Dictionary
+########################################
+
+target_values = {}
+
+
+for target, metrics in (
+    target_metrics.iterrows()
+):
+
+    target_values[
+        target
+    ] = (
+        float(
+            metrics["Mean"]
+        ),
+        float(
+            metrics["Std"]
+        ),
+        get_target_orientation(
+            target
+        ),
+    )
+
+
+########################################
+# Create Adjusted Signal
+########################################
+
+predictions_df["Date"] = pd.to_datetime(
+    predictions_df["Date"]
+)
+
+
+predictions_df["Horizon Key"] = (
+    predictions_df.apply(
+        horizon_key,
+        axis=1,
+    )
+)
+
+
+predictions_df["Quality Score"] = (
+    pd.to_numeric(
+        predictions_df["Quality Score"],
+        errors="coerce",
+    )
+    .clip(0.0, 1.0)
+    .fillna(0.0)
 )
 
 
 ########################################
-# Benchmark Data
+# Market Targets In Prediction Format
+#
+# IMPORTANT:
+# These are realised target values, not
+# model predictions. They are suitable for
+# benchmark comparison and scoring only.
+# They must not be used to choose portfolio
+# weights because that would leak future
+# target information into the backtest.
 ########################################
 
-benchmark_df = (
-    market_df[
+selected_model_targets = (
+    selected_models_df["Target"]
+    .astype(str)
+    .drop_duplicates()
+    .tolist()
+)
+
+
+available_market_targets = [
+    target
+    for target in selected_model_targets
+    if target in market.columns
+]
+
+
+missing_market_targets = [
+    target
+    for target in selected_model_targets
+    if target not in market.columns
+]
+
+
+if missing_market_targets:
+    logger.warning(
+        "Market dataframe does not contain %d selected model targets; "
+        "they cannot be placed into market_predictions_df: %s",
+        len(missing_market_targets),
+        missing_market_targets,
+    )
+
+
+if not available_market_targets:
+    raise ValueError(
+        "The market dataframe does not contain any targets that have selected models."
+    )
+
+
+########################################
+# Keep Only Date, Return And Targets
+########################################
+
+market = (
+    market[
         [
-            "Close"
+            "Date",
+            "Return",
         ]
+        + available_market_targets
     ]
     .copy()
 )
 
 
-benchmark_df[
-    "Return"
-] = (
-    benchmark_df[
-        "Close"
+market = market[
+    market["Date"].between(
+        BACKTEST_START,
+        BACKTEST_END,
+        inclusive="both",
+    )
+].copy()
+
+
+########################################
+# Convert Market Targets From Columns
+# Into Rows
+########################################
+
+market_predictions_df = market.melt(
+    id_vars=[
+        "Date",
+        "Return",
+    ],
+    value_vars=available_market_targets,
+    var_name="Target",
+    value_name="Prediction",
+)
+
+
+logger.info(
+    "Market targets reshaped | rows=%d | targets=%d",
+    len(market_predictions_df),
+    market_predictions_df["Target"].nunique(),
+)
+
+
+
+market_predictions_df["Ticker"] = "^GSPC"
+
+
+market_predictions_df = market_predictions_df.dropna(
+    subset=[
+        "Date",
+        "Return"
     ]
-    .pct_change()
+).copy()
+
+
+CONTINUOUS_PORTFOLIO_TARGET_TYPES = {
+    "ALPHA",
+    "RELATIVE_ALPHA",
+    "RISK_ADJUSTED_ALPHA",
+    "CROSS_SECTION_ALPHA",
+
+    "VOLATILITY",
+    "DOWNSIDE_VOLATILITY",
+    "UPSIDE_VOLATILITY",
+    "VOLATILITY_ASYMMETRY",
+    "ABSOLUTE_MOVE",
+
+    "DOWNSIDE",
+    "TAIL_RISK",
+    "DOWNSIDE_EXCURSION",
+    "UPSIDE_EXCURSION",
+
+    "TIME_TO_DOWNSIDE_EXCURSION",
+    "TIME_TO_UPSIDE_EXCURSION",
+
+    "RECOVERY",
+    "REVERSAL",
+
+    "EXECUTION",
+    "LIQUIDITY",
+    "MARKET_IMPACT",
+    "CORRELATION",
+    "COVARIANCE",
+}
+
+
+BINARY_PORTFOLIO_TARGET_TYPES = {
+    "DIRECTION",
+    "ALPHA_BINARY",
+    "TAIL_EVENT",
+    "UPSIDE_EVENT",
+    "VOLATILITY_EVENT",
+    "CROSS_SECTION_DOWNSIDE",
+}
+
+
+MULTICLASS_PORTFOLIO_TARGET_TYPES = {
+    "DIRECTION_MULTICLASS",
+    "BARRIER_ALPHA",
+    "REGIME",
+}
+
+
+def prediction_to_signal(row):
+    if row["Portfolio Target Type"] in CONTINUOUS_PORTFOLIO_TARGET_TYPES:
+
+        metrics = target_values[row["Target"]]
+
+        signal = metrics[2] * ((row["Prediction"] - metrics[0])/metrics[1] )
+
+    elif row["Portfolio Target Type"] in BINARY_PORTFOLIO_TARGET_TYPES:
+
+        target = row["Target"]
+
+        metrics = target_values[target]
+
+        prediction = pd.to_numeric(
+            row["Prediction"],
+            errors="coerce",
+        )
+
+        if pd.isna(prediction):
+            signal = 0.0
+
+        else:
+            prediction = float(
+                np.clip(
+                    prediction,
+                    0.0,
+                    1.0,
+                )
+            )
+
+            # The mean of a binary training target
+            # is its positive-class base probability.
+            p0 = metrics[0]
+
+            if (
+                not np.isfinite(p0)
+                or p0 <= 0.0
+                or p0 >= 1.0
+            ):
+                signal = 0.0
+
+            else:
+
+                if prediction >= p0:
+
+                    signal = (
+                        prediction
+                        - p0
+                    ) / (
+                        1.0
+                        - p0
+                    )
+
+                else:
+
+                    signal = (
+                        prediction
+                        - p0
+                    ) / p0
+
+            signal = metrics[2] * (float(
+                np.clip(
+                    signal,
+                    -1.0,
+                    1.0,
+                ))
+            )
+
+    elif row["Portfolio Target Type"] in MULTICLASS_PORTFOLIO_TARGET_TYPES:
+
+        target = row["Target"]
+
+        prediction = pd.to_numeric(
+            row["Prediction"],
+            errors="coerce",
+        )
+
+        if pd.isna(prediction):
+            signal = 0.0
+
+        else:
+            class_values = (
+                pd.to_numeric(
+                    train_df[target],
+                    errors="coerce",
+                )
+                .dropna()
+                .unique()
+            )
+
+            if len(class_values) < 2:
+                signal = 0.0
+
+            else:
+                lower_class = float(
+                    np.min(class_values)
+                )
+
+                upper_class = float(
+                    np.max(class_values)
+                )
+
+                signal = (
+                    2.0
+                    * (
+                        float(prediction)
+                        - lower_class
+                    )
+                    / (
+                        upper_class
+                        - lower_class
+                    )
+                    - 1.0
+                )
+
+                signal = target_values[target][2] * (float(
+                    np.clip(
+                        signal,
+                        -1.0,
+                        1.0,
+                    ))
+                )
+
+    else:
+
+        raise ValueError(
+            "Unknown Portfolio Target Type: "
+            f"{row['Portfolio Target Type']}"
+        )
+
+    return signal
+
+########################################
+# Stock Signals
+########################################
+
+predictions_df["Signal"] = (
+    predictions_df.apply(
+        prediction_to_signal,
+        axis=1,
+    )
 )
 
 
-benchmark_df[
-    "Date"
-] = (
-    benchmark_df.index
+logger.info(
+    "Stock signals created | rows=%d | missing=%d",
+    len(predictions_df),
+    int(predictions_df["Signal"].isna().sum()),
+)
+
+predictions_df.dropna(
+    subset=["Signal"],
+    inplace=True,
+)
+
+predictions_df.reset_index(
+    drop=True,
+    inplace=True,
+)
+
+predictions_df["Adjusted Signal"] = (
+    predictions_df["Signal"]
+    * predictions_df["Quality Score"]
 )
 
 
-benchmark_df = (
-    benchmark_df[
+predictions_df = (
+    predictions_df
+    .sort_values(
         [
             "Date",
-            "Close",
-            "Return",
+            "Ticker",
+            "Target",
         ]
-    ]
+    )
     .reset_index(
         drop=True
     )
@@ -2738,89 +2385,325 @@ benchmark_df = (
 
 
 ########################################
-# Save Database
+# Prediction Metadata By Target
 ########################################
 
-DATA_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
+prediction_target_metadata = (
+    predictions_df[
+        [
+            "Target",
+            "Portfolio Target Type",
+            "Horizon Key",
+            "Quality Score",
+        ]
+    ]
+    .sort_values(
+        [
+            "Target",
+            "Quality Score",
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    )
+    .drop_duplicates(
+        subset=[
+            "Target",
+        ],
+        keep="first",
+    )
+)
+
+
+########################################
+# Add Metadata To Every Market Row
+########################################
+
+market_predictions_df = (
+    market_predictions_df
+    .drop(
+        columns=[
+            "Portfolio Target Type",
+            "Horizon Key",
+            "Quality Score",
+        ],
+        errors="ignore",
+    )
+    .merge(
+        prediction_target_metadata,
+        on="Target",
+        how="inner",
+        validate="many_to_one",
+    )
 )
 
 
 logger.info(
-    "Writing cached data to %s",
-    OUTPUT_DB,
+    "Market metadata merged | rows=%d | targets=%d | portfolio types=%d",
+    len(market_predictions_df),
+    market_predictions_df["Target"].nunique(),
+    market_predictions_df["Portfolio Target Type"].nunique(),
+)
+
+
+if market_predictions_df[
+    "Portfolio Target Type"
+].isna().any():
+
+    missing_targets = (
+        market_predictions_df.loc[
+            market_predictions_df[
+                "Portfolio Target Type"
+            ].isna(),
+            "Target",
+        ]
+        .unique()
+        .tolist()
+    )
+
+    raise ValueError(
+        "Missing Portfolio Target Type for "
+        f"market targets: {missing_targets}"
+    )
+
+
+########################################
+# Market Signals
+########################################
+
+market_predictions_df["Signal"] = (
+    market_predictions_df.apply(
+        prediction_to_signal,
+        axis=1,
+    )
+)
+
+
+logger.info(
+    "Market signals created | rows=%d | missing=%d",
+    len(market_predictions_df),
+    int(market_predictions_df["Signal"].isna().sum()),
+)
+
+market_predictions_df.dropna(
+    subset=["Signal"],
+    inplace=True,
+)
+
+market_predictions_df.reset_index(
+    drop=True,
+    inplace=True,
+)
+
+
+market_predictions_df[
+    "Adjusted Signal"
+] = (
+    market_predictions_df["Signal"]
+    * market_predictions_df["Quality Score"]
+)
+
+
+market_predictions_df = (
+    market_predictions_df[
+        [
+            "Date",
+            "Ticker",
+            "Return",
+            "Target",
+            "Portfolio Target Type",
+            "Horizon Key",
+            "Quality Score",
+            "Signal",
+            "Adjusted Signal",
+        ]
+    ]
+    .sort_values(
+        [
+            "Date",
+            "Target",
+        ]
+    )
+    .reset_index(
+        drop=True
+    )
+)
+
+########################################
+# Market Adjusted Signal
+########################################
+
+market_predictions_df["Adjusted Signal"] = (
+    market_predictions_df["Signal"]
+    * market_predictions_df["Quality Score"]
+)
+
+
+market_predictions_df = (
+    market_predictions_df[
+        [
+            "Date",
+            "Ticker",
+            "Return",
+            "Target",
+            "Portfolio Target Type",
+            "Horizon Key",
+            "Quality Score",
+            "Signal",
+            "Adjusted Signal",
+        ]
+    ]
+    .sort_values(
+        [
+            "Date",
+            "Target",
+        ]
+    )
+    .reset_index(drop=True)
+)
+
+
+########################################
+# Group Market Like Stock Predictions
+########################################
+
+grouped_market_predictions_df = (
+    market_predictions_df
+    .groupby(
+        [
+            "Date",
+            "Ticker",
+            "Portfolio Target Type",
+            "Horizon Key",
+        ],
+        as_index=False,
+    )
+    .agg(
+        Return=(
+            "Return",
+            "first",
+        ),
+        Signal=(
+            "Adjusted Signal",
+            "mean",
+        ),
+    )
+)
+
+
+########################################
+# Aggregate Target Models By Type/Horizon
+########################################
+
+grouped_predictions_df = (
+    predictions_df[
+        [
+            "Date",
+            "Ticker",
+            "Return",
+            "Portfolio Target Type",
+            "Horizon Key",
+            "Adjusted Signal",
+        ]
+    ]
+    .groupby(
+        [
+            "Date",
+            "Ticker",
+            "Portfolio Target Type",
+            "Horizon Key",
+        ],
+        as_index=False,
+    )
+    .agg(
+        Return=(
+            "Return",
+            "first",
+        ),
+        Signal=(
+            "Adjusted Signal",
+            "mean",
+        ),
+    )
+)
+
+
+logger.info(
+    "Prediction aggregation complete | stock rows=%d | market rows=%d",
+    len(grouped_predictions_df),
+    len(grouped_market_predictions_df),
+)
+
+
+
+
+########################################
+# Matching Market Backtest Data
+########################################
+
+market_backtest = (
+    market[
+        market["Date"].between(
+            BACKTEST_START,
+            BACKTEST_END,
+            inclusive="both",
+        )
+    ]
+    .copy()
+    .sort_values("Date")
+    .reset_index(drop=True)
+)
+
+
+########################################
+# Final In-Memory Outputs
+########################################
+
+logger.info(
+    "Ready | predictions_df=%d rows | grouped_predictions_df=%d rows | "
+    "market_predictions_df=%d rows | grouped_market_predictions_df=%d rows | "
+    "market_backtest=%d rows",
+    len(predictions_df),
+    len(grouped_predictions_df),
+    len(market_predictions_df),
+    len(grouped_market_predictions_df),
+    len(market_backtest),
+)
+
+########################################
+# Save Market And Stock Predictions
+########################################
+
+BACKTEST_DATABASE = Path(
+    "/Users/sam/Progressive-Projects/Projects/"
+    "Equity Selector/data/Backtest_Database.db"
 )
 
 
 with sqlite3.connect(
-    OUTPUT_DB
+    BACKTEST_DATABASE
 ) as connection:
 
-    model_data.to_sql(
-        "Model_Data",
+    grouped_market_predictions_df.to_sql(
+        "Market",
+        connection,
+        if_exists="replace",
+        index=False,
+    )
+
+    grouped_predictions_df.to_sql(
+        "Stocks",
         connection,
         if_exists="replace",
         index=False,
     )
 
 
-    benchmark_df.to_sql(
-        "Benchmark",
-        connection,
-        if_exists="replace",
-        index=False,
-    )
-
-
-    selected_models_df.to_sql(
-        SELECTED_MODELS_TABLE,
-        connection,
-        if_exists="replace",
-        index=False,
-    )
-
-
-    selected_model_features_df.to_sql(
-        SELECTED_MODEL_FEATURES_TABLE,
-        connection,
-        if_exists="replace",
-        index=False,
-    )
-
-
-    required_features_df.to_sql(
-        "Required_Features",
-        connection,
-        if_exists="replace",
-        index=False,
-    )
-
-
-    config_df.to_sql(
-        "Config",
-        connection,
-        if_exists="replace",
-        index=False,
-    )
-
-
-    connection.execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-        idx_model_data_split_date_ticker
-        ON Model_Data (Split, Date, Ticker)
-        """
-    )
-
-
-    connection.execute(
-        """
-        CREATE INDEX IF NOT EXISTS
-        idx_benchmark_date
-        ON Benchmark (Date)
-        """
-    )
-
-
-    connection.commit()
+logger.info(
+    "Saved backtest data | database=%s | "
+    "market rows=%d | stocks rows=%d",
+    BACKTEST_DATABASE,
+    len(grouped_market_predictions_df),
+    len(grouped_predictions_df),
+)

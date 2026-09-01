@@ -1236,7 +1236,6 @@ logger.info(
     ],
 )
 
-
 HORIZON_SCORE_RANGES = {
 
     ########################################
@@ -1251,10 +1250,10 @@ HORIZON_SCORE_RANGES = {
 
         "1d": (0.20, 0.55),
         "5d": (0.45, 0.75),
-        "20d": (0.70, 0.95),
-        "60d": (0.85, 1.00),
-        "120d": (0.70, 1.00),
-        "252d": (0.50, 0.80),
+        "20d": (0.65, 0.95),
+        "60d": (0.60, 1.00),
+        "120d": (0.30, 0.85),
+        "252d": (0.00, 0.60),
     },
 
     "RELATIVE_ALPHA": {
@@ -1265,10 +1264,10 @@ HORIZON_SCORE_RANGES = {
 
         "1d": (0.20, 0.50),
         "5d": (0.45, 0.75),
-        "20d": (0.75, 1.00),
-        "60d": (0.85, 1.00),
-        "120d": (0.70, 1.00),
-        "252d": (0.55, 0.85),
+        "20d": (0.65, 1.00),
+        "60d": (0.60, 1.00),
+        "120d": (0.30, 0.85),
+        "252d": (0.00, 0.65),
     },
 
     "RISK_ADJUSTED_ALPHA": {
@@ -1279,10 +1278,10 @@ HORIZON_SCORE_RANGES = {
 
         "1d": (0.30, 0.60),
         "5d": (0.55, 0.85),
-        "20d": (0.80, 1.00),
-        "60d": (0.85, 1.00),
-        "120d": (0.65, 0.95),
-        "252d": (0.45, 0.70),
+        "20d": (0.70, 1.00),
+        "60d": (0.60, 1.00),
+        "120d": (0.30, 0.85),
+        "252d": (0.00, 0.60),
     },
 
     "CROSS_SECTION_ALPHA": {
@@ -1293,10 +1292,10 @@ HORIZON_SCORE_RANGES = {
 
         "1d": (0.25, 0.55),
         "5d": (0.50, 0.80),
-        "20d": (0.85, 1.00),
-        "60d": (0.80, 1.00),
-        "120d": (0.55, 0.90),
-        "252d": (0.4, 0.65),
+        "20d": (0.70, 1.00),
+        "60d": (0.60, 1.00),
+        "120d": (0.25, 0.80),
+        "252d": (0.00, 0.55),
     },
 
     "CROSS_SECTION_DOWNSIDE": {
@@ -1510,20 +1509,6 @@ HORIZON_SCORE_RANGES = {
         "252d": (0.00, 0.10),
     },
 
-    "UPSIDE_RISK": {
-        "1m": (0.15, 0.50),
-        "5m": (0.25, 0.60),
-        "15m": (0.35, 0.70),
-        "60m": (0.50, 0.85),
-
-        "1d": (0.65, 1.00),
-        "5d": (0.85, 1.00),
-        "20d": (0.70, 1.00),
-        "60d": (0.40, 0.75),
-        "120d": (0.20, 0.55),
-        "252d": (0.00, 0.35),
-    },
-
     "UPSIDE_EVENT": {
         "1m": (0.80, 1.00),
         "5m": (0.85, 1.00),
@@ -1647,8 +1632,8 @@ HORIZON_SCORE_RANGES = {
         "5d": (0.55, 0.90),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.60, 0.95),
-        "252d": (0.50, 0.75),
+        "120d": (0.10, 0.80),
+        "252d": (0.00, 0.65),
     },
 
     "CORRELATION": {
@@ -1661,8 +1646,8 @@ HORIZON_SCORE_RANGES = {
         "5d": (0.60, 0.95),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.60, 0.95),
-        "252d": (0.50, 0.75),
+        "120d": (0.10, 0.80),
+        "252d": (0.00, 0.65),
     },
 
     "COVARIANCE": {
@@ -1675,8 +1660,8 @@ HORIZON_SCORE_RANGES = {
         "5d": (0.60, 0.95),
         "20d": (0.85, 1.00),
         "60d": (0.80, 1.00),
-        "120d": (0.60, 0.95),
-        "252d": (0.50, 0.75),
+        "120d": (0.10, 0.80),
+        "252d": (0.00, 0.65),
     },
 
 
@@ -1726,6 +1711,7 @@ HORIZON_SCORE_RANGES = {
         "252d": (0.00, 0.00),
     },
 }
+
 
 ########################################
 # REWRITTEN: Daily / Intraday Horizon Helpers
@@ -1958,6 +1944,173 @@ def get_horizon_score(row):
         ]
     )
 
+def apply_horizon_signal_refresh(
+    predictions_df,
+    rebalance_multiplier,
+):
+
+    if not (
+        0 < rebalance_multiplier <= 1
+    ):
+
+        raise ValueError(
+            "rebalance_multiplier must be "
+            "greater than 0 and no greater than 1."
+        )
+
+
+    required_columns = {
+        "Date",
+        "Ticker",
+        "Portfolio Target Type",
+        "Horizon Key",
+        "Signal",
+    }
+
+    missing_columns = (
+        required_columns
+        -
+        set(predictions_df.columns)
+    )
+
+    if missing_columns:
+
+        raise ValueError(
+            "Missing required columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+
+    refreshed = (
+        predictions_df
+        .copy()
+        .sort_values(
+            [
+                "Ticker",
+                "Portfolio Target Type",
+                "Horizon Key",
+                "Date",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+
+    group_columns = [
+        "Ticker",
+        "Portfolio Target Type",
+        "Horizon Key",
+    ]
+
+
+    for group_values, group_indexes in refreshed.groupby(
+        group_columns,
+        sort=False,
+    ).groups.items():
+
+        ticker, portfolio_type, horizon_key = (
+            group_values
+        )
+
+        horizon_key = str(
+            horizon_key
+        ).strip().lower()
+
+
+        ########################################
+        # Horizon Key Validation
+        #
+        # Expected examples:
+        # 1d, 5d, 20d, 60d
+        ########################################
+
+        if not horizon_key.endswith("d"):
+
+            raise ValueError(
+                "Daily Horizon Key must end in 'd'. "
+                f"Received {horizon_key!r} for "
+                f"{ticker!r} / {portfolio_type!r}."
+            )
+
+
+        try:
+
+            horizon_days = int(
+                horizon_key[:-1]
+            )
+
+        except ValueError as error:
+
+            raise ValueError(
+                "Could not extract the number of days "
+                f"from Horizon Key {horizon_key!r}."
+            ) from error
+
+
+        ########################################
+        # Number of Rows Before Refresh
+        ########################################
+
+        refresh_rows = max(
+            1,
+            int(
+                np.ceil(
+                    rebalance_multiplier
+                    *
+                    horizon_days
+                )
+            ),
+        )
+
+
+        ########################################
+        # Hold Each Refresh Signal
+        ########################################
+
+        group_indexes = np.asarray(
+            list(group_indexes)
+        )
+
+        original_signals = (
+            refreshed.loc[
+                group_indexes,
+                "Signal",
+            ]
+            .to_numpy()
+        )
+
+        row_positions = np.arange(
+            len(original_signals)
+        )
+
+        refresh_start_positions = (
+            row_positions
+            //
+            refresh_rows
+        ) * refresh_rows
+
+        refreshed.loc[
+            group_indexes,
+            "Signal",
+        ] = original_signals[
+            refresh_start_positions
+        ]
+
+
+    return (
+        refreshed
+        .sort_values(
+            [
+                "Date",
+                "Ticker",
+                "Portfolio Target Type",
+                "Horizon Key",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+
 
 ########################################
 # Fit Models + Generate Horizon
@@ -2123,6 +2276,248 @@ predictions_df = pd.concat(
 del prediction_parts
 
 
+########################################
+# Target Mean And Standard Deviation
+########################################
+
+train_sql_columns = ", ".join(
+    quote_sql_identifier(
+        target
+    )
+    for target in selected_targets
+)
+
+
+# Uses the safely purged model-fitting cutoff.
+actual_train_end = min(
+    RESEARCH_SPLITS[
+        analysis_type
+    ][
+        "fit_end"
+    ]
+    for analysis_type
+    in ACTIVE_ANALYSIS_TYPES
+)
+
+
+with sqlite3.connect(
+    FEATURE_DATABASE
+) as connection:
+
+    train_df = pd.read_sql_query(
+        f"""
+        SELECT {train_sql_columns}
+        FROM {quote_sql_identifier(STOCK_TYPE)}
+        WHERE date({quote_sql_identifier('Date')})
+              <= date(?)
+        """,
+        connection,
+        params=[
+            pd.Timestamp(
+                actual_train_end
+            ).strftime(
+                "%Y-%m-%d"
+            )
+        ],
+    )
+
+
+train_df[
+    selected_targets
+] = (
+    train_df[
+        selected_targets
+    ]
+    .apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+)
+
+
+
+target_metrics = (
+    train_df[
+        selected_targets
+    ]
+    .agg(
+        [
+            "mean",
+            "std",
+        ]
+    )
+    .T
+    .rename(
+        columns={
+            "mean": "Mean",
+            "std": "Std",
+        }
+    )
+)
+
+
+target_metrics.index.name = "Target"
+
+
+########################################
+# Target Orientation
+########################################
+
+TARGET_ORIENTATION = {
+    "Forward Return": 1,
+    "Forward Log Return": 1,
+    "Forward Excess Return": 1,
+
+    "Future Volatility": -1,
+    "Future Variance": -1,
+    "Future Upside Volatility": 1,
+    "Future Downside Volatility": -1,
+    "Future Downside Upside Volatility Ratio": -1,
+
+    "Future Mean Absolute Return": 1,
+    "Future Maximum Absolute Return": 1,
+
+    "Future Direction": 1,
+
+    "Future Return Above 1 Percent": 1,
+    "Future Return Above 2 Percent": 1,
+    "Future Return Above 5 Percent": 1,
+    "Future Return Above 10 Percent": 1,
+
+    "Three Class Direction 2 Percent": 1,
+    "Three Class Direction 5 Percent": 1,
+
+    "Barrier 2.0 -2.0": 1,
+    "Barrier 2.0 -5.0": 1,
+    "Barrier 5.0 -2.0": 1,
+    "Barrier 5.0 -5.0": 1,
+
+    "Volatility Barrier 20 1 1": -1,
+    "Volatility Barrier 20 1 2": -1,
+    "Volatility Barrier 20 2 1": -1,
+    "Volatility Barrier 20 2 2": -1,
+    "Volatility Barrier 60 1 1": -1,
+    "Volatility Barrier 60 1 2": -1,
+    "Volatility Barrier 60 2 1": -1,
+    "Volatility Barrier 60 2 2": -1,
+
+    "Maximum Favourable Excursion": 1,
+    "Maximum Adverse Excursion": 1,
+
+    "Time To Maximum Favourable Excursion": -1,
+    "Time To Maximum Adverse Excursion": 1,
+
+    "Future Maximum Drawdown": 1,
+    "Future Minimum Return": 1,
+
+    "Future Return Volatility Ratio": 1,
+    "Future Sortino Ratio": 1,
+    "Future Return Minus Risk 0.5": 1,
+    "Future Return Minus Risk 1": 1,
+    "Future Return Minus Risk 2": 1,
+    "Future Return Drawdown Ratio": 1,
+
+    "Future Return Rank": 1,
+
+    "Top 20 Percent Future Return": 1,
+    "Top 25 Percent Future Return": 1,
+    "Bottom 20 Percent Future Return": -1,
+    "Bottom 25 Percent Future Return": -1,
+}
+
+
+########################################
+# Match Target With Orientation
+########################################
+
+def get_target_orientation(
+    target,
+):
+    target_tokens = str(
+        target
+    ).lower().split()
+
+    matches = []
+
+
+    for base_target, orientation in (
+        TARGET_ORIENTATION.items()
+    ):
+
+        base_tokens = (
+            base_target
+            .lower()
+            .split()
+        )
+
+        target_iterator = iter(
+            target_tokens
+        )
+
+        is_match = all(
+            any(
+                target_token
+                == base_token
+                for target_token
+                in target_iterator
+            )
+            for base_token
+            in base_tokens
+        )
+
+        if is_match:
+
+            matches.append(
+                (
+                    len(base_tokens),
+                    orientation,
+                    base_target,
+                )
+            )
+
+
+    if not matches:
+
+        raise KeyError(
+            "No TARGET_ORIENTATION entry "
+            f"matched target: {target}"
+        )
+
+
+    # Use the longest and therefore most specific match.
+    _, orientation, _ = max(
+        matches,
+        key=lambda value: value[0],
+    )
+
+    return orientation
+
+
+########################################
+# Final Target Values Dictionary
+########################################
+
+target_values = {}
+
+
+for target, metrics in (
+    target_metrics.iterrows()
+):
+
+    target_values[
+        target
+    ] = (
+        float(
+            metrics["Mean"]
+        ),
+        float(
+            metrics["Std"]
+        ),
+        get_target_orientation(
+            target
+        ),
+    )
+
 logger.info(
     "Prediction generation complete | rows=%d | targets=%d | %.1f MB",
     len(
@@ -2144,28 +2539,206 @@ predictions_df[
 )
 
 
-predictions_df[
-    "Signal"
-] = (
-    pd.to_numeric(
-        predictions_df[
-            "Signal"
-        ],
-        errors="coerce",
-    )
-    .replace(
-        [
-            np.inf,
-            -np.inf,
-        ],
-        np.nan,
-    )
-    .fillna(
-        0.0
+CONTINUOUS_PORTFOLIO_TARGET_TYPES = {
+    "ALPHA",
+    "RELATIVE_ALPHA",
+    "RISK_ADJUSTED_ALPHA",
+    "CROSS_SECTION_ALPHA",
+
+    "VOLATILITY",
+    "DOWNSIDE_VOLATILITY",
+    "UPSIDE_VOLATILITY",
+    "VOLATILITY_ASYMMETRY",
+    "ABSOLUTE_MOVE",
+
+    "DOWNSIDE",
+    "TAIL_RISK",
+    "DOWNSIDE_EXCURSION",
+    "UPSIDE_EXCURSION",
+
+    "TIME_TO_DOWNSIDE_EXCURSION",
+    "TIME_TO_UPSIDE_EXCURSION",
+
+    "RECOVERY",
+    "REVERSAL",
+
+    "EXECUTION",
+    "LIQUIDITY",
+    "MARKET_IMPACT",
+    "CORRELATION",
+    "COVARIANCE",
+}
+
+
+BINARY_PORTFOLIO_TARGET_TYPES = {
+    "DIRECTION",
+    "ALPHA_BINARY",
+    "TAIL_EVENT",
+    "UPSIDE_EVENT",
+    "VOLATILITY_EVENT",
+    "CROSS_SECTION_DOWNSIDE",
+}
+
+
+MULTICLASS_PORTFOLIO_TARGET_TYPES = {
+    "DIRECTION_MULTICLASS",
+    "BARRIER_ALPHA",
+    "REGIME",
+}
+
+
+def prediction_to_signal(row):
+    if row["Portfolio Target Type"] in CONTINUOUS_PORTFOLIO_TARGET_TYPES:
+
+        metrics = target_values[row["Target"]]
+
+        signal = metrics[2] * ((row["Prediction"] - metrics[0])/metrics[1] )
+
+    elif row["Portfolio Target Type"] in BINARY_PORTFOLIO_TARGET_TYPES:
+
+        target = row["Target"]
+
+        metrics = target_values[target]
+
+        prediction = pd.to_numeric(
+            row["Prediction"],
+            errors="coerce",
+        )
+
+        if pd.isna(prediction):
+            signal = 0.0
+
+        else:
+            prediction = float(
+                np.clip(
+                    prediction,
+                    0.0,
+                    1.0,
+                )
+            )
+
+            # The mean of a binary training target
+            # is its positive-class base probability.
+            p0 = metrics[0]
+
+            if (
+                not np.isfinite(p0)
+                or p0 <= 0.0
+                or p0 >= 1.0
+            ):
+                signal = 0.0
+
+            else:
+
+                if prediction >= p0:
+
+                    signal = (
+                        prediction
+                        - p0
+                    ) / (
+                        1.0
+                        - p0
+                    )
+
+                else:
+
+                    signal = (
+                        prediction
+                        - p0
+                    ) / p0
+
+            signal = metrics[2] * (float(
+                np.clip(
+                    signal,
+                    -1.0,
+                    1.0,
+                ))
+            )
+
+    elif row["Portfolio Target Type"] in MULTICLASS_PORTFOLIO_TARGET_TYPES:
+
+        target = row["Target"]
+
+        prediction = pd.to_numeric(
+            row["Prediction"],
+            errors="coerce",
+        )
+
+        if pd.isna(prediction):
+            signal = 0.0
+
+        else:
+            class_values = (
+                pd.to_numeric(
+                    train_df[target],
+                    errors="coerce",
+                )
+                .dropna()
+                .unique()
+            )
+
+            if len(class_values) < 2:
+                signal = 0.0
+
+            else:
+                lower_class = float(
+                    np.min(class_values)
+                )
+
+                upper_class = float(
+                    np.max(class_values)
+                )
+
+                signal = (
+                    2.0
+                    * (
+                        float(prediction)
+                        - lower_class
+                    )
+                    / (
+                        upper_class
+                        - lower_class
+                    )
+                    - 1.0
+                )
+
+                signal = target_values[target][2] * (float(
+                    np.clip(
+                        signal,
+                        -1.0,
+                        1.0,
+                    ))
+                )
+
+    else:
+
+        raise ValueError(
+            "Unknown Portfolio Target Type: "
+            f"{row['Portfolio Target Type']}"
+        )
+
+    return signal
+
+########################################
+# Stock Signals
+########################################
+
+predictions_df["Signal"] = (
+    predictions_df.apply(
+        prediction_to_signal,
+        axis=1,
     )
 )
 
-predictions_df = predictions_df.dropna()
+predictions_df.dropna(
+    subset=["Signal"],
+    inplace=True,
+)
+
+predictions_df.reset_index(
+    drop=True,
+    inplace=True,
+)
 
 
 predictions_df[
@@ -2204,13 +2777,37 @@ predictions_df = (
     )
 )
 
-pass
+REBALANCE_MULTIPLIER = 1
+
+predictions_df = apply_horizon_signal_refresh(
+    predictions_df=predictions_df,
+    rebalance_multiplier=REBALANCE_MULTIPLIER,
+)
+
 
 predictions_df[
     "Horizon Score"
 ] = predictions_df.apply(
     get_horizon_score,
     axis=1,
+)
+
+direction_types = [
+    "DIRECTION",
+    "DIRECTION_MULTICLASS",
+    "ALPHA_BINARY",
+    "BARRIER_ALPHA",
+]
+
+predictions_df["Direction Signal"] = (
+    predictions_df["Signal"]
+    .where(
+        predictions_df[
+            "Portfolio Target Type"
+        ].isin(direction_types),
+        0.0,
+    )
+    .fillna(0.0)
 )
 
 initial_predictions_df = predictions_df
@@ -2232,77 +2829,146 @@ def backtest_quality(df):
 
     results = run_portfolio_backtest_from_predictions(
         predictions_df=df,
-        rebalance_every=1,
         max_weight=0.30,
         concentration_penalty=0.10,
         trading_fee=0.00,
     )
+    epsilon = 1e-12
 
-    delta_return = (
+
+    ########################################
+    # Relative Return Improvement
+    ########################################
+
+    strategy_return = float(
         results[
             "Strategy Return"
         ]
-        - market_results[
+    )
+
+    market_return = float(
+        market_results[
             "Return"
         ]
     )
 
-    delta_sharpe = (
+    relative_return = (
+        strategy_return
+        - market_return
+    ) / (
+        abs(
+            strategy_return
+        )
+        + abs(
+            market_return
+        )
+        + epsilon
+    )
+
+
+    ########################################
+    # Relative Sharpe Improvement
+    ########################################
+
+    strategy_sharpe = float(
         results[
             "Sharpe Ratio"
         ]
-        - market_results[
+    )
+
+    market_sharpe = float(
+        market_results[
             "Sharpe Ratio"
         ]
     )
 
-    delta_max_drawdown = (
+    relative_sharpe = (
+        strategy_sharpe
+        - market_sharpe
+    ) / (
         abs(
-            market_results[
-                "Max Drawdown"
-            ]
+            strategy_sharpe
         )
-        - abs(
+        + abs(
+            market_sharpe
+        )
+        + epsilon
+    )
+
+
+    ########################################
+    # Relative Maximum Drawdown Improvement
+    ########################################
+
+    strategy_max_drawdown = abs(
+        float(
             results[
                 "Max Drawdown"
             ]
         )
     )
 
-    delta_average_drawdown = (
-        abs(
+    market_max_drawdown = abs(
+        float(
             market_results[
-                "Average Drawdown"
+                "Max Drawdown"
             ]
         )
-        - abs(
+    )
+
+    relative_max_drawdown = (
+        market_max_drawdown
+        - strategy_max_drawdown
+    ) / (
+        market_max_drawdown
+        + strategy_max_drawdown
+        + epsilon
+    )
+
+
+    ########################################
+    # Relative Average Drawdown Improvement
+    ########################################
+
+    strategy_average_drawdown = abs(
+        float(
             results[
                 "Average Drawdown"
             ]
         )
     )
+
+    market_average_drawdown = abs(
+        float(
+            market_results[
+                "Average Drawdown"
+            ]
+        )
+    )
+
+    relative_average_drawdown = (
+        market_average_drawdown
+        - strategy_average_drawdown
+    ) / (
+        market_average_drawdown
+        + strategy_average_drawdown
+        + epsilon
+    )
+
+
+    ########################################
+    # Backtest Quality
+    ########################################
 
     return (
-        0.40
-        * np.tanh(
-            delta_sharpe
-            / 0.50
-        )
-        + 0.30
-        * np.tanh(
-            delta_return
-            / 0.10
-        )
-        + 0.20
-        * np.tanh(
-            delta_max_drawdown
-            / 0.10
-        )
-        + 0.10
-        * np.tanh(
-            delta_average_drawdown
-            / 0.05
-        )
+        0.25
+        * relative_sharpe
+        + 0.35
+        * relative_return
+        + 0.25
+        * relative_max_drawdown
+        + 0.15
+        * relative_average_drawdown
     )
 
 
@@ -2494,7 +3160,7 @@ for (
                     range_quality,
 
                 "Frozen":
-                    range_quality < 0.003,
+                    range_quality < 0.002,
             }
         )
 
@@ -2505,7 +3171,7 @@ for (
             horizon,
             mean_quality,
             range_quality,
-            range_quality < 0.003,
+            range_quality < 0.002,
         )
 
 
@@ -2513,7 +3179,7 @@ for (
         # Freeze Insensitive Parameters
         ####################################
 
-        if range_quality < 0.003:
+        if range_quality < 0.002:
 
             index = min(
                 FROZEN_INDEX,
@@ -2967,12 +3633,12 @@ results = random_screen(
 
 results = random_screen(
     iterations=50,
-    threshold=0.30,
+    threshold=0.2,
 )
 
 results = random_screen(
     iterations=100,
-    threshold=0.35,
+    threshold=0.3,
 )
 
 
@@ -2998,7 +3664,7 @@ logger.info(
 ########################################
 
 iters = 100
-thres = 0.35
+thres = 0.3
 
 
 while total_configurations > 1000:
@@ -3202,11 +3868,6 @@ for (
         test_df
     )
 
-
-    if BQ < 0:
-        continue
-
-
     exhaustive_results.append(
         {
             "BQ":
@@ -3233,8 +3894,13 @@ exhaustive_results.sort(
 )
 
 
+exhaustive_results = [
+    result["Horizon Scores"]
+    for result in exhaustive_results
+]
+
 logger.info(
-    "Exhaustive search complete | non-negative configurations=%d/%d",
+    "Exhaustive search complete | Configurations=%d/%d",
     len(
         exhaustive_results
     ),
@@ -3243,34 +3909,28 @@ logger.info(
 
 
 ########################################
-# Keep Top 5%
+# Keep Top Best Results
 ########################################
 
 if exhaustive_results:
 
-    top_n = max(
-        1,
-        math.ceil(
-            len(
-                exhaustive_results
-            )
-            * 0.05
-        ),
-    )
+    num_of_configs = len(exhaustive_results)
 
+    taken_configs = min(num_of_configs, max(5, int(np.sqrt(num_of_configs))))
 
-    top_configurations = (
-        exhaustive_results[
-            :top_n
-        ]
-    )
+    if num_of_configs == taken_configs:
+
+        top_configurations = exhaustive_results
+
+    else:
+        top_configurations = exhaustive_results[:taken_configs]
 
 else:
 
     top_configurations = []
 
     logger.warning(
-        "No non-negative BQ configurations survived."
+        "No BQ configurations survived."
     )
 
 
@@ -3280,3 +3940,9 @@ logger.info(
         top_configurations
     ),
 )
+
+HORIZON_DIR = (DATA_DIR / "Top_Horizon_Scores.txt")
+
+file = open(HORIZON_DIR, 'w')
+file.write(str(top_configurations))
+file.close()
