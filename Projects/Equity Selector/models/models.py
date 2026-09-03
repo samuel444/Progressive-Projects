@@ -1,3 +1,5 @@
+from turtle import pd
+
 import numpy as np
 
 from scipy.stats import spearmanr
@@ -461,6 +463,11 @@ def fit_hist_gradient_boosting_regressor(
     min_samples_leaf,
     l2_regularization
 ):
+    if max_depth is not None:
+        if np.isnan(max_depth):
+            max_depth = None
+
+    max_depth = int(max_depth) if max_depth is not None else None
 
     model = HistGradientBoostingRegressor(
         learning_rate=learning_rate,

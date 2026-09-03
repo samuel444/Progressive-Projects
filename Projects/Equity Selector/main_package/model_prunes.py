@@ -5,6 +5,7 @@ import numpy as np
 from scipy.stats import t
 import ast
 from itertools import combinations
+import re
 
 ############################################################
 # SETTINGS
@@ -49,6 +50,19 @@ def parse_parameters(value):
         return {}
 
     value = value.strip()
+
+    value = re.sub(
+        r"np\.(?:float64|int64)\(([^()]*)\)",
+        r"\1",
+        value,
+    )
+
+    value = re.sub(
+        r"\bnan\b",
+        "None",
+        value,
+    )
+
 
     if value == "":
         return {}
