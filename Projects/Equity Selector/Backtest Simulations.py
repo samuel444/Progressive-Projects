@@ -1395,6 +1395,17 @@ with sqlite3.connect(
         )
     )
 
+
+# BEGIN FINAL EVALUATION STORAGE
+# Collect diagnostics separately: none of these columns enter selection.
+final_evaluation_storage = {}
+final_evaluation_stock_removals = {}
+
+
+
+def save_final_evaluation_values(simulation_id, **values):
+    final_evaluation_storage.setdefault(simulation_id, {}).update(values)
+# END FINAL EVALUATION STORAGE
 logger.info(
     "Loaded %d strategy simulations for filtering",
     len(strategy_simulations_results),
@@ -2030,6 +2041,25 @@ for simulation in strategy_simulations_results.to_dict(
             if deviations >= stressed_bq_threshold:
                 simulations_to_remove.append(simulation["Simulation ID"])
 
+        # BEGIN FINAL EVALUATION STORAGE
+        # The original filter deliberately skips very small removed fractions.
+        # Still calculate their display value; do not apply an extra rejection.
+        if removed_fraction < MINIMUM_REMOVED_FRACTION:
+            final_evaluation_removed_quality = result_metrics(
+                removed_results[str(rolling_period)].copy()
+            )[-1]
+        else:
+            final_evaluation_removed_quality = strategy_quality
+        final_evaluation_period_name = {
+            1: "Day", 5: "Week", 21: "Month", 252: "Year"
+        }[rolling_period]
+        save_final_evaluation_values(
+            simulation["Simulation ID"],
+            **{f"Best {final_evaluation_period_name} Removed Quality":
+               final_evaluation_removed_quality},
+        )
+        # END FINAL EVALUATION STORAGE
+
 strategy_simulations_results = (
     strategy_simulations_results[
         ~strategy_simulations_results[
@@ -2143,6 +2173,12 @@ for simulation in strategy_simulations_results.to_dict(
 
         if deviations >= stock_removal_threshold:
             simulations_to_remove.append(simulation["Simulation ID"])
+
+        # BEGIN FINAL EVALUATION STORAGE
+        final_evaluation_stock_removals.setdefault(simulation_id, []).append(
+            {"Ticker": removed_ticker, "Backtest Quality": strategy_quality}
+        )
+        # END FINAL EVALUATION STORAGE
 
 strategy_simulations_results = (
     strategy_simulations_results[
@@ -2781,6 +2817,18 @@ for simulation in strategy_simulations_results.to_dict(
         simulation_id
     ] = random_neighbourhood_score
 
+    # BEGIN FINAL EVALUATION STORAGE
+    save_final_evaluation_values(
+        simulation_id,
+        **{
+            "Neighbourhood Pass Rate": (
+                float(np.mean(random_deviations < settings_robustness_threshold))
+                if np.isfinite(random_deviations).all() else np.nan
+            ),
+        },
+    )
+    # END FINAL EVALUATION STORAGE
+
 
     ####################################
     # Worst Random Deviation
@@ -3064,6 +3112,19 @@ for simulation in strategy_simulations_results.to_dict(
     unseen_quality_scores[
         simulation_id
     ] = unseen_deviation
+
+    # BEGIN FINAL EVALUATION STORAGE
+    save_final_evaluation_values(
+        simulation_id,
+        **{
+            "Unseen Backtest Quality": strategy_quality,
+            "Unseen Gate Passed": (
+                bool(unseen_deviation < unseen_stock_robustness_threshold)
+                if np.isfinite(unseen_deviation) else None
+            ),
+        },
+    )
+    # END FINAL EVALUATION STORAGE
 
 
 ########################################
@@ -4095,6 +4156,119 @@ logger.info(
     len(strategy_simulations_results),
 )
 
+
+# BEGIN FINAL EVALUATION STORAGE
+# Attach diagnostic values only AFTER the final selection has finished.
+for final_evaluation_id in strategy_simulations_results["Simulation ID"]:
+    final_evaluation_removals = pd.DataFrame(
+        final_evaluation_stock_removals.get(final_evaluation_id, []),
+        columns=["Ticker", "Backtest Quality"],
+    )
+    final_evaluation_valid = final_evaluation_removals["Backtest Quality"].notna()
+    final_evaluation_worst = (
+        final_evaluation_removals.loc[
+            final_evaluation_removals["Backtest Quality"].idxmin()
+        ] if final_evaluation_valid.any() else None
+    )
+    save_final_evaluation_values(
+        final_evaluation_id,
+        **{
+            "Mean Stock Removal Quality": (
+                final_evaluation_removals["Backtest Quality"].mean()
+                if len(final_evaluation_removals) and final_evaluation_valid.all()
+                else np.nan
+            ),
+            "Worst Stock Removal Quality": (
+                final_evaluation_worst["Backtest Quality"]
+                if final_evaluation_worst is not None else np.nan
+            ),
+            "Worst Removed Ticker": (
+                final_evaluation_worst["Ticker"]
+                if final_evaluation_worst is not None else None
+            ),
+        },
+    )
+
+# Aggregate existing target contributions using ID-based matching.
+# Raw means are descriptive signal aggregates, not prediction accuracy.
+# Relative score: mean per-type (strategy - market) / market-grid SD;
+# positive means a larger signal score, not necessarily better for every type.
+final_evaluation_market_rows = market_simulations_results.set_index("Simulation ID")
+if not final_evaluation_market_rows.index.is_unique:
+    raise ValueError("Market Simulation Results must have unique Simulation IDs.")
+final_evaluation_type_columns = [
+    column for column in strategy_simulations_results.columns
+    if column.startswith("Type Score | ")
+    and column in market_simulations_results.columns
+]
+final_evaluation_type_sd = market_simulations_results[
+    final_evaluation_type_columns
+].std()
+for final_evaluation_row in strategy_simulations_results.to_dict(orient="records"):
+    final_evaluation_id = final_evaluation_row["Simulation ID"]
+    final_evaluation_market_row = final_evaluation_market_rows.loc[final_evaluation_id]
+    final_evaluation_strategy_values = pd.Series(
+        {column: final_evaluation_row[column] for column in final_evaluation_type_columns},
+        dtype=float,
+    )
+    final_evaluation_market_values = final_evaluation_market_row[
+        final_evaluation_type_columns
+    ].astype(float)
+    final_evaluation_common = (
+        np.isfinite(final_evaluation_strategy_values)
+        & np.isfinite(final_evaluation_market_values)
+    )
+    final_evaluation_relative_mask = (
+        final_evaluation_common & np.isfinite(final_evaluation_type_sd)
+        & final_evaluation_type_sd.gt(0)
+    )
+    final_evaluation_relative = (
+        (final_evaluation_strategy_values - final_evaluation_market_values)
+        .loc[final_evaluation_relative_mask]
+        / final_evaluation_type_sd.loc[final_evaluation_relative_mask]
+    )
+    save_final_evaluation_values(
+        final_evaluation_id,
+        **{
+            "Portfolio Target Score": final_evaluation_strategy_values[
+                final_evaluation_common
+            ].mean(),
+            "Market Target Score": final_evaluation_market_values[
+                final_evaluation_common
+            ].mean(),
+            "Relative Target Score": final_evaluation_relative.mean(),
+        },
+    )
+
+final_evaluation_extra_columns = pd.DataFrame.from_dict(
+    final_evaluation_storage, orient="index"
+)
+for final_evaluation_column in final_evaluation_extra_columns.columns:
+    strategy_simulations_results[final_evaluation_column] = (
+        strategy_simulations_results["Simulation ID"].map(
+            final_evaluation_extra_columns[final_evaluation_column]
+        )
+    )
+
+# Explicit export contract: reconstruction settings + metrics consumed by
+# the standalone final evaluator. Do not export intermediate/type-detail columns.
+final_evaluation_passed_columns = [
+    "Simulation ID", "Horizon Score Index", "Type Configuration",
+    "Rebalance Multiplier", "Max Weight", "Concentration Penalty",
+    "Strategy Return", "Sharpe Ratio", "Average Drawdown", "Max Drawdown",
+    "Relative Return", "Relative Sharpe Ratio", "Relative Max Drawdown",
+    "Relative Average Drawdown", "Backtest Quality",
+    "Best Day Removed Quality", "Best Week Removed Quality",
+    "Best Month Removed Quality", "Best Year Removed Quality",
+    "Mean Stock Removal Quality", "Worst Stock Removal Quality",
+    "Worst Removed Ticker", "Neighbourhood Score", "Neighbourhood Pass Rate",
+    "Unseen Stock Score", "Unseen Backtest Quality", "Unseen Gate Passed",
+    "Portfolio Target Score", "Market Target Score", "Relative Target Score",
+]
+strategy_simulations_results = strategy_simulations_results.loc[
+    :, final_evaluation_passed_columns
+].copy()
+# END FINAL EVALUATION STORAGE
 ########################################
 # Save Passed Strategies
 ########################################

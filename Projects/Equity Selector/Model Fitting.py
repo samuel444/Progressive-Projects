@@ -1869,11 +1869,11 @@ if testing_recommendations.lower() in ['y','yes']:
         N_RECOMMENDATIONS = 3
         
     try:
-        N_MODELS = int(input("How many models per family? (Default 3)\n"))
+        N_MODELS = int(input("How many models per family? (Default 5)\n"))
         if N_MODELS <= 0:
-            N_MODELS = 3
+            N_MODELS = 5
     except ValueError:
-        N_MODELS = 3
+        N_MODELS = 5
 
 else:
     testing_recommendations = False
