@@ -1,4 +1,3 @@
-
 def historical_var(df, windows=(20, 60, 252), quantiles=(0.01, 0.05)):
     if isinstance(windows, int):
         windows = [windows]
@@ -34,8 +33,7 @@ def expected_shortfall(df, windows=(20, 60, 252), quantiles=(0.01, 0.05)):
                 return values[values <= cutoff].mean()
 
             df[f"Expected Shortfall {label} Percent {window}"] = returns.rolling(window).apply(
-                lambda values: values[values <= values.quantile(quantile)].mean(),
-                raw=False
+                lambda values: values[values <= values.quantile(quantile)].mean(), raw=False
             )
 
     return df
@@ -56,7 +54,9 @@ def extreme_returns(df, windows=(20, 60, 252), standard_deviations=(2, 3)):
 
         for standard_deviation in standard_deviations:
             extreme = (returns - mean).abs() > standard_deviation * std
-            df[f"Extreme Return Frequency {window} {standard_deviation} SD"] = extreme.rolling(window).mean()
+            df[f"Extreme Return Frequency {window} {standard_deviation} SD"] = extreme.rolling(
+                window
+            ).mean()
 
     return df
 

@@ -94,4 +94,9 @@ def test_cross_sectional_future_rank():
     first_date = df[df["Date"] == dates[0]].sort_values("Future Return Rank 2")
 
     assert first_date.iloc[-1]["Ticker"] == "B"
-    assert df[(df["Date"] == dates[0]) & (df["Ticker"] == "B")]["Top 33 Percent Future Return 2"].iloc[0] == 1
+    assert (
+        df[(df["Date"] == dates[0]) & (df["Ticker"] == "B")]["Top 33 Percent Future Return 2"].iloc[
+            0
+        ]
+        == 1
+    )

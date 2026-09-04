@@ -11,7 +11,7 @@ def future_maximum_drawdown(df, horizons=(20, 60, 120)):
         values = np.full(len(df), np.nan)
 
         for i in range(len(df) - horizon):
-            path = prices[i:i + horizon + 1]
+            path = prices[i : i + horizon + 1]
             peak = np.maximum.accumulate(path)
             drawdown = path / peak - 1
             values[i] = np.min(drawdown)
@@ -31,7 +31,7 @@ def future_minimum_return(df, horizons=(5, 20, 60)):
         values = np.full(len(df), np.nan)
 
         for i in range(len(df) - horizon):
-            path = prices[i + 1:i + horizon + 1] / prices[i] - 1
+            path = prices[i + 1 : i + horizon + 1] / prices[i] - 1
             values[i] = np.min(path)
 
         df[f"Future Minimum Return {horizon}"] = values

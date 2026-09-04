@@ -42,7 +42,7 @@ def forward_excess_return(df, horizons=(5, 20, 60), benchmark_df=None, benchmark
             end=last_date,
             auto_adjust=True,
             progress=False,
-            multi_level_index=False
+            multi_level_index=False,
         )
 
     benchmark_close = benchmark_df["Close"].reindex(df.index)

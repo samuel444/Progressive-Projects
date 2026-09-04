@@ -9,21 +9,13 @@ def pearson_correlation(df, features, target, threshold=0.01):
     to_drop = []
 
     for feature in features:
-
         temp_df = df[[feature, target]].dropna()
 
-        if (
-            len(temp_df) < 2
-            or temp_df[feature].nunique() < 2
-            or temp_df[target].nunique() < 2
-        ):
+        if len(temp_df) < 2 or temp_df[feature].nunique() < 2 or temp_df[target].nunique() < 2:
             to_drop.append(feature)
             continue
 
-        pearson = pearsonr(
-            temp_df[feature],
-            temp_df[target]
-        ).statistic
+        pearson = pearsonr(temp_df[feature], temp_df[target]).statistic
 
         if np.isfinite(pearson) and abs(pearson) > threshold:
             selected_features.append(feature)
@@ -33,19 +25,11 @@ def pearson_correlation(df, features, target, threshold=0.01):
     return selected_features, to_drop
 
 
-def ic_screen(
-    df,
-    features,
-    target,
-    ic_threshold=0.01,
-    ir_threshold=0.25,
-    sign_threshold=0.55
-):
+def ic_screen(df, features, target, ic_threshold=0.01, ir_threshold=0.25, sign_threshold=0.55):
 
     daily_ics = []
 
     for date, group in df.groupby("Date"):
-
         feature_ranks = group[features].rank()
         target_rank = group[target].rank()
 
@@ -63,16 +47,12 @@ def ic_screen(
     positive_consistency = (daily_ics > 0).mean()
     negative_consistency = (daily_ics < 0).mean()
 
-    sign_consistency = pd.concat(
-        [positive_consistency, negative_consistency],
-        axis=1
-    ).max(axis=1)
+    sign_consistency = pd.concat([positive_consistency, negative_consistency], axis=1).max(axis=1)
 
     selected_features = []
     to_drop = []
 
     for feature in features:
-
         if (
             abs(mean_ic[feature]) >= ic_threshold
             and abs(ic_ir[feature]) >= ir_threshold
@@ -94,18 +74,18 @@ def quantile_spread(df, features, target, threshold=0.05):
     target_std = df[target].std()
 
     for feature in features:
-
         temp_df = df[[feature, target]].dropna()
 
-        temp_df["Quantile"] = pd.qcut(
-            temp_df[feature],
-            5,
-            labels=False,
-            duplicates="drop"
-        )
+        if temp_df.empty or temp_df[feature].nunique() < 2:
+            to_drop.append(feature)
+            continue
+        temp_df["Quantile"] = pd.qcut(temp_df[feature], 5, labels=False, duplicates="drop")
 
         means = temp_df.groupby("Quantile")[target].mean()
 
+        if len(means) < 2 or not np.isfinite(target_std) or target_std <= 0:
+            to_drop.append(feature)
+            continue
         spread = abs(means.iloc[-1] - means.iloc[0])
 
         normalised_spread = spread / target_std
@@ -124,15 +104,12 @@ def quantile_monotonicity(df, features, target, threshold=0.75):
     to_drop = []
 
     for feature in features:
-
         temp_df = df[[feature, target]].dropna()
 
-        temp_df["Quantile"] = pd.qcut(
-            temp_df[feature],
-            5,
-            labels=False,
-            duplicates="drop"
-        )
+        if temp_df.empty or temp_df[feature].nunique() < 2:
+            to_drop.append(feature)
+            continue
+        temp_df["Quantile"] = pd.qcut(temp_df[feature], 5, labels=False, duplicates="drop")
 
         means = temp_df.groupby("Quantile")[target].mean()
 
@@ -160,24 +137,15 @@ def time_stability(df, features, target, threshold=0.55):
     df["Year"] = pd.to_datetime(df["Date"]).dt.year
 
     for feature in features:
-
         correlations = []
 
         for year, group in df.groupby("Year"):
-
             temp_df = group[[feature, target]].dropna()
 
-            if (
-                len(temp_df) < 3
-                or temp_df[feature].nunique() < 2
-                or temp_df[target].nunique() < 2
-            ):
+            if len(temp_df) < 3 or temp_df[feature].nunique() < 2 or temp_df[target].nunique() < 2:
                 continue
 
-            correlation = spearmanr(
-                temp_df[feature],
-                temp_df[target]
-            ).statistic
+            correlation = spearmanr(temp_df[feature], temp_df[target]).statistic
 
             if np.isfinite(correlation):
                 correlations.append(correlation)
@@ -201,12 +169,7 @@ def time_stability(df, features, target, threshold=0.55):
     return selected_features, to_drop
 
 
-def feature_target_coverage(
-    df,
-    features,
-    target,
-    threshold=0.60
-):
+def feature_target_coverage(df, features, target, threshold=0.60):
 
     selected_features = []
     to_drop = []
@@ -214,7 +177,6 @@ def feature_target_coverage(
     num_of_rows = len(df)
 
     for feature in features:
-
         temp_df = df[[feature, target]].dropna()
 
         coverage = len(temp_df) / num_of_rows

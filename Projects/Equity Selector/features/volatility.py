@@ -76,8 +76,16 @@ def semivariance(df, windows=(20, 60, 120)):
     returns = df["Close"].pct_change()
 
     for window in windows:
-        downside = (returns.where(returns < 0) ** 2).rolling(window, min_periods=max(2, window // 4)).mean()
-        upside = (returns.where(returns > 0) ** 2).rolling(window, min_periods=max(2, window // 4)).mean()
+        downside = (
+            (returns.where(returns < 0) ** 2)
+            .rolling(window, min_periods=max(2, window // 4))
+            .mean()
+        )
+        upside = (
+            (returns.where(returns > 0) ** 2)
+            .rolling(window, min_periods=max(2, window // 4))
+            .mean()
+        )
 
         df[f"Downside Semivariance {window}"] = downside
         df[f"Upside Semivariance {window}"] = upside
@@ -119,7 +127,7 @@ def volatility_persistence(df, windows=(20, 60, 252), lags=(1, 5)):
                 returns.abs().rolling(window).corr(returns.abs().shift(lag))
             )
             df[f"Squared Return Autocorrelation {window} Lag {lag}"] = (
-                (returns ** 2).rolling(window).corr((returns ** 2).shift(lag))
+                (returns**2).rolling(window).corr((returns**2).shift(lag))
             )
 
     return df

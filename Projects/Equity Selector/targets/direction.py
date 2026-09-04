@@ -1,4 +1,3 @@
-
 def future_direction(df, horizons=(1, 5, 20, 60)):
     if isinstance(horizons, int):
         horizons = [horizons]

@@ -19,7 +19,9 @@ def return_dispersion(df, periods=(1, 5, 20)):
     for period in periods:
         returns = close.pct_change(period)
         df[f"Return Dispersion {period}"] = returns.std(axis=1)
-        df[f"Return IQR Dispersion {period}"] = returns.quantile(0.75, axis=1) - returns.quantile(0.25, axis=1)
+        df[f"Return IQR Dispersion {period}"] = returns.quantile(0.75, axis=1) - returns.quantile(
+            0.25, axis=1
+        )
 
     return df
 

@@ -18,7 +18,7 @@ def _market_return(df, market_df=None, market_ticker="^GSPC"):
             end=last_date,
             auto_adjust=True,
             progress=False,
-            multi_level_index=False
+            multi_level_index=False,
         )
 
     return market_df["Close"].reindex(df.index).pct_change()
@@ -78,7 +78,9 @@ def upside_beta(df, windows=(20, 60, 120, 252), market_df=None, market_ticker="^
     return df
 
 
-def beta_change(df, windows=(20, 60, 120, 252), periods=(1, 5, 20), market_df=None, market_ticker="^GSPC"):
+def beta_change(
+    df, windows=(20, 60, 120, 252), periods=(1, 5, 20), market_df=None, market_ticker="^GSPC"
+):
     if isinstance(windows, int):
         windows = [windows]
 
@@ -97,14 +99,16 @@ def beta_change(df, windows=(20, 60, 120, 252), periods=(1, 5, 20), market_df=No
     return df
 
 
-def beta_ratios(df, short_windows=(20, 60), long_windows=(120, 252), market_df=None, market_ticker="^GSPC"):
+def beta_ratios(
+    df, short_windows=(20, 60), long_windows=(120, 252), market_df=None, market_ticker="^GSPC"
+):
     if isinstance(short_windows, int):
         short_windows = [short_windows]
 
     if isinstance(long_windows, int):
         long_windows = [long_windows]
 
-    windows = sorted(set(short_windows + long_windows))
+    windows = sorted(set(list(short_windows) + list(long_windows)))
     missing = [window for window in windows if f"Rolling Beta {window}" not in df.columns]
 
     if missing:

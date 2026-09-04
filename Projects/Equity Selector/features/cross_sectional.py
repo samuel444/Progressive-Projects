@@ -37,11 +37,15 @@ def sector_neutral_rank(df, columns, sector_col="Sector", date_col="Date"):
 
     for column in columns:
         if date_col in df.columns:
-            df[f"{column} Sector Neutral Rank"] = df.groupby([date_col, sector_col])[column].rank(pct=True)
+            df[f"{column} Sector Neutral Rank"] = df.groupby([date_col, sector_col])[column].rank(
+                pct=True
+            )
         else:
             temp = df.copy()
             temp["__Date"] = temp.index.get_level_values(0)
-            df[f"{column} Sector Neutral Rank"] = temp.groupby(["__Date", sector_col])[column].rank(pct=True).values
+            df[f"{column} Sector Neutral Rank"] = (
+                temp.groupby(["__Date", sector_col])[column].rank(pct=True).values
+            )
 
     return df
 

@@ -1,4 +1,3 @@
-
 def volume_changes(df, periods=(1, 5, 20)):
     if isinstance(periods, int):
         periods = [periods]
@@ -65,7 +64,9 @@ def return_volume_interactions(df, momentum_windows=(1, 5, 20, 60), volume_windo
 
         for volume_window in volume_windows:
             relative = df["Volume"] / df["Volume"].rolling(volume_window).mean()
-            df[f"Return Volume Interaction {momentum_window} {volume_window}"] = stock_return * relative
+            df[f"Return Volume Interaction {momentum_window} {volume_window}"] = (
+                stock_return * relative
+            )
 
     return df
 

@@ -1,5 +1,6 @@
-
-def future_return_rank(df, horizons=(5, 20, 60), ticker_col="Ticker", date_col="Date", price_col="Close"):
+def future_return_rank(
+    df, horizons=(5, 20, 60), ticker_col="Ticker", date_col="Date", price_col="Close"
+):
     if isinstance(horizons, int):
         horizons = [horizons]
 
@@ -7,12 +8,21 @@ def future_return_rank(df, horizons=(5, 20, 60), ticker_col="Ticker", date_col="
         future_price = df.groupby(ticker_col)[price_col].shift(-horizon)
         forward_return = future_price / df[price_col] - 1
         df[f"Forward Return {horizon}"] = forward_return
-        df[f"Future Return Rank {horizon}"] = df.assign(__Target=forward_return).groupby(date_col)["__Target"].rank(pct=True)
+        df[f"Future Return Rank {horizon}"] = (
+            df.assign(__Target=forward_return).groupby(date_col)["__Target"].rank(pct=True)
+        )
 
     return df
 
 
-def top_quantile_label(df, horizons=(20, 60), quantiles=(0.20, 0.25), ticker_col="Ticker", date_col="Date", price_col="Close"):
+def top_quantile_label(
+    df,
+    horizons=(20, 60),
+    quantiles=(0.20, 0.25),
+    ticker_col="Ticker",
+    date_col="Date",
+    price_col="Close",
+):
     if isinstance(horizons, int):
         horizons = [horizons]
 
@@ -33,7 +43,14 @@ def top_quantile_label(df, horizons=(20, 60), quantiles=(0.20, 0.25), ticker_col
     return df
 
 
-def bottom_quantile_label(df, horizons=(20, 60), quantiles=(0.20, 0.25), ticker_col="Ticker", date_col="Date", price_col="Close"):
+def bottom_quantile_label(
+    df,
+    horizons=(20, 60),
+    quantiles=(0.20, 0.25),
+    ticker_col="Ticker",
+    date_col="Date",
+    price_col="Close",
+):
     if isinstance(horizons, int):
         horizons = [horizons]
 

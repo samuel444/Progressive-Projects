@@ -1,4 +1,3 @@
-
 def momentum(df, windows=(2, 3, 5, 10, 20, 40, 60, 90, 120, 180, 252)):
     if isinstance(windows, int):
         windows = [windows]

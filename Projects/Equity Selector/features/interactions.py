@@ -1,4 +1,3 @@
-
 def feature_interactions(df, left_features, right_features):
     if isinstance(left_features, str):
         left_features = [left_features]
@@ -16,7 +15,9 @@ def feature_interactions(df, left_features, right_features):
     return df
 
 
-def momentum_volatility_interactions(df, momentum_windows=(20, 60, 120), volatility_windows=(20, 60)):
+def momentum_volatility_interactions(
+    df, momentum_windows=(20, 60, 120), volatility_windows=(20, 60)
+):
     if isinstance(momentum_windows, int):
         momentum_windows = [momentum_windows]
 
@@ -30,12 +31,16 @@ def momentum_volatility_interactions(df, momentum_windows=(20, 60, 120), volatil
 
         for volatility_window in volatility_windows:
             volatility = returns.rolling(volatility_window).std()
-            df[f"Momentum Volatility Interaction {momentum_window} {volatility_window}"] = momentum * volatility
+            df[f"Momentum Volatility Interaction {momentum_window} {volatility_window}"] = (
+                momentum * volatility
+            )
 
     return df
 
 
-def momentum_drawdown_interactions(df, momentum_windows=(20, 60, 120), drawdown_windows=(20, 60, 252)):
+def momentum_drawdown_interactions(
+    df, momentum_windows=(20, 60, 120), drawdown_windows=(20, 60, 252)
+):
     if isinstance(momentum_windows, int):
         momentum_windows = [momentum_windows]
 
@@ -47,7 +52,9 @@ def momentum_drawdown_interactions(df, momentum_windows=(20, 60, 120), drawdown_
 
         for drawdown_window in drawdown_windows:
             drawdown = df["Close"] / df["Close"].rolling(drawdown_window).max() - 1
-            df[f"Momentum Drawdown Interaction {momentum_window} {drawdown_window}"] = momentum * drawdown
+            df[f"Momentum Drawdown Interaction {momentum_window} {drawdown_window}"] = (
+                momentum * drawdown
+            )
 
     return df
 
@@ -64,7 +71,9 @@ def momentum_volume_interactions(df, momentum_windows=(20, 60, 120), volume_wind
 
         for volume_window in volume_windows:
             relative_volume = df["Volume"] / df["Volume"].rolling(volume_window).mean()
-            df[f"Momentum Volume Interaction {momentum_window} {volume_window}"] = momentum * relative_volume
+            df[f"Momentum Volume Interaction {momentum_window} {volume_window}"] = (
+                momentum * relative_volume
+            )
 
     return df
 

@@ -1,4 +1,3 @@
-
 def moving_average_distance(df, windows=(5, 10, 20, 50, 100, 200)):
     if isinstance(windows, int):
         windows = [windows]
@@ -41,7 +40,9 @@ def moving_average_ratios(df, short_windows=(5, 10, 20, 50, 100), long_windows=(
     return df
 
 
-def exponential_moving_average_ratios(df, short_spans=(5, 10, 20, 50), long_spans=(20, 50, 100, 200)):
+def exponential_moving_average_ratios(
+    df, short_spans=(5, 10, 20, 50), long_spans=(20, 50, 100, 200)
+):
     if isinstance(short_spans, int):
         short_spans = [short_spans]
 

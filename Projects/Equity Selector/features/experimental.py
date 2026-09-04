@@ -80,7 +80,9 @@ def variance_ratio(df, windows=(20, 60, 120), lags=(2, 5, 10)):
         for lag in lags:
             aggregated = returns.rolling(lag).sum()
             aggregated_variance = aggregated.rolling(window).var()
-            df[f"Variance Ratio {window} Lag {lag}"] = aggregated_variance / (lag * one_period_variance)
+            df[f"Variance Ratio {window} Lag {lag}"] = aggregated_variance / (
+                lag * one_period_variance
+            )
 
     return df
 

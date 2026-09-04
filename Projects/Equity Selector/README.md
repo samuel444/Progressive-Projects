@@ -1,4 +1,8 @@
+> **Configured research run:** begin with [START_HERE.md](START_HERE.md). It includes the M2 launcher, original dates, GBP account check and final evaluation order.
+
 # Equity Selector
+
+See [HARDENING.md](HARDENING.md) for the packaged entry points, installation, verification commands, corrected backtest conventions, and remaining research assumptions. Historical cached results must be regenerated after the timing and metric corrections.
 
 A multi-stage quantitative equity research pipeline for turning screened market data and target-specific predictive models into fully specified portfolio strategies for detailed historical evaluation.
 
@@ -94,7 +98,7 @@ Optional stage for intraday stock types.
 
 It converts lookbacks and forward horizons into session-safe rules, removes unavailable rows around session boundaries and updates the selected-feature mapping.
 
-### 3. `Model_Fitting.py`
+### 3. `Model Fitting.py`
 
 Runs target-specific model development using chronological walk-forward validation.
 

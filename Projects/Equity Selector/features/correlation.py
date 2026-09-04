@@ -18,13 +18,15 @@ def _benchmark_return(df, benchmark_df=None, benchmark_ticker="^GSPC"):
             end=last_date,
             auto_adjust=True,
             progress=False,
-            multi_level_index=False
+            multi_level_index=False,
         )
 
     return benchmark_df["Close"].reindex(df.index).pct_change()
 
 
-def rolling_correlation(df, windows=(20, 60, 120, 252), benchmark_df=None, benchmark_ticker="^GSPC", label="Market"):
+def rolling_correlation(
+    df, windows=(20, 60, 120, 252), benchmark_df=None, benchmark_ticker="^GSPC", label="Market"
+):
     if isinstance(windows, int):
         windows = [windows]
 
@@ -37,7 +39,9 @@ def rolling_correlation(df, windows=(20, 60, 120, 252), benchmark_df=None, bench
     return df
 
 
-def upside_downside_correlation(df, windows=(60, 252), benchmark_df=None, benchmark_ticker="^GSPC", label="Market"):
+def upside_downside_correlation(
+    df, windows=(60, 252), benchmark_df=None, benchmark_ticker="^GSPC", label="Market"
+):
     if isinstance(windows, int):
         windows = [windows]
 
@@ -51,17 +55,24 @@ def upside_downside_correlation(df, windows=(60, 252), benchmark_df=None, benchm
 
     for window in windows:
         minimum = max(3, window // 4)
-        df[f"Upside {label} Correlation {window}"] = (
-            upside_stock.rolling(window, min_periods=minimum).corr(upside_benchmark)
-        )
-        df[f"Downside {label} Correlation {window}"] = (
-            downside_stock.rolling(window, min_periods=minimum).corr(downside_benchmark)
-        )
+        df[f"Upside {label} Correlation {window}"] = upside_stock.rolling(
+            window, min_periods=minimum
+        ).corr(upside_benchmark)
+        df[f"Downside {label} Correlation {window}"] = downside_stock.rolling(
+            window, min_periods=minimum
+        ).corr(downside_benchmark)
 
     return df
 
 
-def correlation_change(df, windows=(20, 60, 252), periods=(5, 20), benchmark_df=None, benchmark_ticker="^GSPC", label="Market"):
+def correlation_change(
+    df,
+    windows=(20, 60, 252),
+    periods=(5, 20),
+    benchmark_df=None,
+    benchmark_ticker="^GSPC",
+    label="Market",
+):
     if isinstance(windows, int):
         windows = [windows]
 

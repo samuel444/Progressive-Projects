@@ -1,3 +1,5 @@
+from equity_selector.validation import validate_chronology, purge_training_data
+from .functions import target_purge_days
 import numpy as np
 
 
@@ -23,10 +25,7 @@ def benchmark_metrics(df):
     # Total Return
     ########################################
 
-    total_return = (
-        close.iloc[-1] / close.iloc[0]
-    ) - 1
-
+    total_return = (close.iloc[-1] / close.iloc[0]) - 1
 
     ########################################
     # Drawdown
@@ -34,14 +33,11 @@ def benchmark_metrics(df):
 
     running_max = close.cummax()
 
-    drawdown = (
-        close / running_max
-    ) - 1
+    drawdown = (close / running_max) - 1
 
     average_drawdown = drawdown.mean()
 
     max_drawdown = drawdown.min()
-
 
     ########################################
     # Annualised Sharpe Ratio
@@ -51,11 +47,7 @@ def benchmark_metrics(df):
         sharpe_ratio = 0.0
 
     else:
-        sharpe_ratio = (
-            returns.mean()
-            / returns.std()
-        ) * np.sqrt(252)
-
+        sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
 
     ########################################
     # Results
@@ -67,6 +59,7 @@ def benchmark_metrics(df):
         "Max Drawdown": max_drawdown,
         "Sharpe Ratio": sharpe_ratio,
     }
+
 
 """
 Multi-target portfolio backtest helpers.
@@ -224,42 +217,7 @@ SCALE_MODELS = {
 # Metadata / parameter helpers
 ########################################
 
-def parse_parameters(parameters: Any) -> Dict[str, Any]:
-    """Parse model parameters stored as dict / JSON / Python-literal text."""
-
-    if parameters is None:
-        return {}
-
-    if isinstance(parameters, dict):
-        parsed = parameters.copy()
-    else:
-        try:
-            if pd.isna(parameters):
-                return {}
-        except (TypeError, ValueError):
-            pass
-
-        text = str(parameters).strip()
-        if text == "":
-            return {}
-
-        # Preserve the behaviour of the supplied backtest code.
-        text = re.sub(r"\bnull\b", "None", text, flags=re.IGNORECASE)
-        text = re.sub(r"\btrue\b", "True", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bfalse\b", "False", text, flags=re.IGNORECASE)
-
-        try:
-            parsed = ast.literal_eval(text)
-        except (SyntaxError, ValueError):
-            parsed = json.loads(str(parameters))
-
-    if not isinstance(parsed, dict):
-        raise ValueError("Model parameters must parse to a dictionary.")
-
-    return {
-        str(key).replace("model__", "", 1): value
-        for key, value in parsed.items()
-    }
+from equity_selector.parameters import parse_parameters
 
 
 def _parse_features(value: Any) -> Sequence[str]:
@@ -292,9 +250,7 @@ def _parse_features(value: Any) -> Sequence[str]:
 
 def _feature_map(
     selected_models_df: pd.DataFrame,
-    model_features: Optional[
-        Union[pd.DataFrame, Mapping[str, Sequence[str]]]
-    ],
+    model_features: Optional[Union[pd.DataFrame, Mapping[str, Sequence[str]]]],
 ) -> Dict[str, Sequence[str]]:
     """Return Target -> selected feature names."""
 
@@ -313,17 +269,12 @@ def _feature_map(
         return mapping
 
     if not isinstance(model_features, pd.DataFrame):
-        raise TypeError(
-            "model_features must be a DataFrame, mapping, or None."
-        )
+        raise TypeError("model_features must be a DataFrame, mapping, or None.")
 
     required = {"Target", "Features"}
     missing = required.difference(model_features.columns)
     if missing:
-        raise ValueError(
-            "model_features is missing columns: "
-            + ", ".join(sorted(missing))
-        )
+        raise ValueError("model_features is missing columns: " + ", ".join(sorted(missing)))
 
     for _, row in model_features.iterrows():
         mapping[str(row["Target"])] = _parse_features(row["Features"])
@@ -354,11 +305,7 @@ def infer_statistical_target_type(y: pd.Series) -> str:
     # sets such as -1/0/1. Avoid treating ordinary continuous targets as
     # multiclass merely because a short sample has a few distinct values.
     numeric = pd.to_numeric(unique, errors="coerce")
-    if (
-        n_unique <= 20
-        and numeric.notna().all()
-        and np.allclose(numeric, np.round(numeric))
-    ):
+    if n_unique <= 20 and numeric.notna().all() and np.allclose(numeric, np.round(numeric)):
         return "multiclass"
 
     return "continuous"
@@ -377,9 +324,7 @@ def _clean_binary_target(y: pd.Series, target: str) -> pd.Series:
 
     classes = np.sort(pd.Series(y).dropna().unique())
     if len(classes) > 2:
-        raise ValueError(
-            f"{target} is binary but contains classes {classes}."
-        )
+        raise ValueError(f"{target} is binary but contains classes {classes}.")
 
     return y
 
@@ -387,6 +332,7 @@ def _clean_binary_target(y: pd.Series, target: str) -> pd.Series:
 ########################################
 # Model builder - faithful to supplied code
 ########################################
+
 
 def build_model(
     model_name: str,
@@ -475,9 +421,7 @@ def build_model(
 
     if name in {"lightgbm", "lgbm"}:
         if LGBMRegressor is None or LGBMClassifier is None:
-            raise ImportError(
-                "lightgbm is required because a selected model uses LightGBM."
-            )
+            raise ImportError("lightgbm is required because a selected model uses LightGBM.")
         if is_regression:
             return LGBMRegressor(**params)
         return LGBMClassifier(**params)
@@ -489,9 +433,7 @@ def build_model(
 
         if name == "xgboost":
             if XGBRegressor is None:
-                raise ImportError(
-                    "xgboost is required because a selected model uses XGBoost."
-                )
+                raise ImportError("xgboost is required because a selected model uses XGBoost.")
             params.pop("objective", None)
             params.setdefault("random_state", 42)
             params.setdefault("n_jobs", -1)
@@ -559,9 +501,7 @@ def build_model(
 
     if name == "xgboost":
         if XGBClassifier is None:
-            raise ImportError(
-                "xgboost is required because a selected model uses XGBoost."
-            )
+            raise ImportError("xgboost is required because a selected model uses XGBoost.")
 
         params.pop("class_weight", None)
         params.pop("objective", None)
@@ -603,14 +543,13 @@ def build_model(
         params.setdefault("random_state", 42)
         return MLPClassifier(**params)
 
-    raise ValueError(
-        f"Unknown model '{model_name}' for target type '{statistical_type}'."
-    )
+    raise ValueError(f"Unknown model '{model_name}' for target type '{statistical_type}'.")
 
 
 ########################################
 # Fit / predict helpers
 ########################################
+
 
 def _fit_target_model(
     training_df: pd.DataFrame,
@@ -624,21 +563,13 @@ def _fit_target_model(
     features = list(features)
 
     missing_columns = [
-        column
-        for column in features + [target]
-        if column not in training_df.columns
+        column for column in features + [target] if column not in training_df.columns
     ]
     if missing_columns:
-        raise ValueError(
-            f"{target} is missing training columns: "
-            + ", ".join(missing_columns)
-        )
+        raise ValueError(f"{target} is missing training columns: " + ", ".join(missing_columns))
 
     model_df = (
-        training_df
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna(subset=features + [target])
-        .copy()
+        training_df.replace([np.inf, -np.inf], np.nan).dropna(subset=features + [target]).copy()
     )
 
     if model_df.empty:
@@ -655,15 +586,9 @@ def _fit_target_model(
         y_train = _clean_binary_target(y_train, target)
 
     if statistical_type != "continuous" and y_train.nunique() < 2:
-        raise ValueError(
-            f"{target} has fewer than two classes in the training data."
-        )
+        raise ValueError(f"{target} has fewer than two classes in the training data.")
 
-    num_classes = (
-        int(y_train.nunique())
-        if statistical_type != "continuous"
-        else None
-    )
+    num_classes = int(y_train.nunique()) if statistical_type != "continuous" else None
 
     model = build_model(
         model_name=model_name,
@@ -682,10 +607,7 @@ def _fit_target_model(
 
     class_values = None
     label_encoder = None
-    is_xgboost_classifier = (
-        statistical_type != "continuous"
-        and model_key == "xgboost"
-    )
+    is_xgboost_classifier = statistical_type != "continuous" and model_key == "xgboost"
 
     if is_xgboost_classifier:
         label_encoder = LabelEncoder()
@@ -711,9 +633,7 @@ def _fit_target_model(
 
         if statistical_type != "continuous":
             if not hasattr(model, "classes_"):
-                raise ValueError(
-                    f"{model_name} does not expose classes_ for {target}."
-                )
+                raise ValueError(f"{model_name} does not expose classes_ for {target}.")
             class_values = np.asarray(model.classes_).copy()
 
     # Used to orient continuous risk targets consistently. If the target is a
@@ -755,8 +675,7 @@ def _predict_target_model(
     missing = [column for column in features if column not in dataframe.columns]
     if missing:
         raise ValueError(
-            f"{model_info['target']} is missing backtest features: "
-            + ", ".join(missing)
+            f"{model_info['target']} is missing backtest features: " + ", ".join(missing)
         )
 
     X = dataframe[features].copy().replace([np.inf, -np.inf], np.nan)
@@ -780,8 +699,7 @@ def _predict_target_model(
     model = model_info["model"]
     if not hasattr(model, "predict_proba"):
         raise ValueError(
-            f"{model_info['model_name']} does not support predict_proba "
-            f"for {model_info['target']}."
+            f"{model_info['model_name']} does not support predict_proba for {model_info['target']}."
         )
 
     probabilities = model.predict_proba(X_model)
@@ -791,14 +709,12 @@ def _predict_target_model(
         numeric_classes = class_values.astype(float)
     except (TypeError, ValueError) as error:
         raise ValueError(
-            f"Classes for {model_info['target']} must be numeric. "
-            f"Got {class_values.tolist()}."
+            f"Classes for {model_info['target']} must be numeric. Got {class_values.tolist()}."
         ) from error
 
     if probabilities.shape[1] != len(numeric_classes):
         raise ValueError(
-            f"Probability columns for {model_info['target']} do not match "
-            "the stored class values."
+            f"Probability columns for {model_info['target']} do not match the stored class values."
         )
 
     expected_class = probabilities @ numeric_classes
@@ -809,6 +725,7 @@ def _predict_target_model(
 ########################################
 # Signal / horizon helpers
 ########################################
+
 
 def _rank_to_minus_one_one(series: pd.Series) -> pd.Series:
     """Cross-sectional rank transform with exact [-1, 1] endpoints."""
@@ -926,6 +843,7 @@ def _lookup_horizon_score(
 # Portfolio optimiser
 ########################################
 
+
 def _construct_portfolio(
     date_predictions: pd.DataFrame,
     max_weight: float,
@@ -943,17 +861,13 @@ def _construct_portfolio(
 
     if max_weight * n_stocks < 1:
         raise ValueError(
-            f"max_weight={max_weight:.2%} is impossible with "
-            f"only {n_stocks} valid stocks."
+            f"max_weight={max_weight:.2%} is impossible with only {n_stocks} valid stocks."
         )
 
     score = portfolio["Overall Score"].to_numpy(dtype=float)
 
     def objective(weights):
-        return -(
-            np.dot(weights, score)
-            - concentration_penalty * np.sum(weights ** 2)
-        )
+        return -(np.dot(weights, score) - concentration_penalty * np.sum(weights**2))
 
     constraints = {
         "type": "eq",
@@ -971,9 +885,7 @@ def _construct_portfolio(
     )
 
     if not result.success:
-        raise ValueError(
-            "Portfolio optimisation failed: " + str(result.message)
-        )
+        raise ValueError("Portfolio optimisation failed: " + str(result.message))
 
     portfolio["Recommended Weight"] = result.x
     return portfolio.sort_values(
@@ -986,12 +898,11 @@ def _construct_portfolio(
 # Public function
 ########################################
 
+
 def run_multi_target_portfolio_backtest(
     dataframe: pd.DataFrame,
     selected_models_df: pd.DataFrame,
-    model_features: Optional[
-        Union[pd.DataFrame, Mapping[str, Sequence[str]]]
-    ] = None,
+    model_features: Optional[Union[pd.DataFrame, Mapping[str, Sequence[str]]]] = None,
     horizon_scores: Optional[Mapping[str, Any]] = None,
     type_values: Optional[Mapping[str, float]] = None,
     max_weight: float = 0.30,
@@ -1063,10 +974,7 @@ def run_multi_target_portfolio_backtest(
     required_data_columns = {"Date", "Ticker", "Close", "Split"}
     missing = required_data_columns.difference(dataframe.columns)
     if missing:
-        raise ValueError(
-            "dataframe is missing required columns: "
-            + ", ".join(sorted(missing))
-        )
+        raise ValueError("dataframe is missing required columns: " + ", ".join(sorted(missing)))
 
     required_model_columns = {
         "Target",
@@ -1079,19 +987,15 @@ def run_multi_target_portfolio_backtest(
     missing = required_model_columns.difference(selected_models_df.columns)
     if missing:
         raise ValueError(
-            "selected_models_df is missing required columns: "
-            + ", ".join(sorted(missing))
+            "selected_models_df is missing required columns: " + ", ".join(sorted(missing))
         )
-
 
     data = dataframe.copy()
     data["Date"] = pd.to_datetime(data["Date"])
     data = data.sort_values(["Date", "Ticker"]).reset_index(drop=True)
 
     if "Return" not in data.columns:
-        data["Return"] = (
-            data.groupby("Ticker", sort=False)["Close"].pct_change()
-        )
+        data["Return"] = data.groupby("Ticker", sort=False)["Close"].pct_change()
 
     split = data["Split"].astype(str).str.upper().str.strip()
     training_df = data.loc[split == "TRAIN"].copy()
@@ -1102,12 +1006,11 @@ def run_multi_target_portfolio_backtest(
     if backtest_df.empty:
         raise ValueError("No BACKTEST rows are present in dataframe.")
 
+    validate_chronology(training_df, backtest_df)
     feature_map = _feature_map(selected_models_df, model_features)
     type_value_map = DEFAULT_TYPE_VALUES.copy()
     if type_values is not None:
-        type_value_map.update(
-            {str(k).upper(): float(v) for k, v in type_values.items()}
-        )
+        type_value_map.update({str(k).upper(): float(v) for k, v in type_values.items()})
 
     predictions_df = backtest_df.copy()
     fitted_models: Dict[str, Dict[str, Any]] = {}
@@ -1163,7 +1066,7 @@ def run_multi_target_portfolio_backtest(
 
         try:
             model_info = _fit_target_model(
-                training_df=training_df,
+                training_df=purge_training_data(training_df, target_purge_days(target)),
                 target=target,
                 portfolio_type=portfolio_type,
                 model_name=model_name,
@@ -1181,9 +1084,7 @@ def run_multi_target_portfolio_backtest(
             if strict:
                 raise
             logger.exception("Skipping %s: %s", target, error)
-            skipped_models.append(
-                {"Target": target, "Reason": str(error)}
-            )
+            skipped_models.append({"Target": target, "Reason": str(error)})
             continue
 
         prediction_column = f"{target} Prediction"
@@ -1194,16 +1095,13 @@ def run_multi_target_portfolio_backtest(
 
         if model_info["statistical_type"] == "continuous":
             oriented_prediction = (
-                predictions_df[prediction_column]
-                * model_info["continuous_orientation"]
+                predictions_df[prediction_column] * model_info["continuous_orientation"]
             )
 
-            predictions_df[signal_column] = (
-                oriented_prediction.groupby(
-                    predictions_df["Date"],
-                    group_keys=False,
-                ).apply(_rank_to_minus_one_one)
-            )
+            predictions_df[signal_column] = oriented_prediction.groupby(
+                predictions_df["Date"],
+                group_keys=False,
+            ).apply(_rank_to_minus_one_one)
 
         else:
             predictions_df[signal_column] = classification_signal(
@@ -1220,9 +1118,7 @@ def run_multi_target_portfolio_backtest(
         )
 
         model_weight = float(horizon_score) * quality
-        predictions_df[contribution_column] = (
-            predictions_df[signal_column] * model_weight
-        )
+        predictions_df[contribution_column] = predictions_df[signal_column] * model_weight
 
         model_info.update(
             {
@@ -1265,9 +1161,7 @@ def run_multi_target_portfolio_backtest(
     # The type value is applied ONCE, preventing target-count bias.
     ####################################
 
-    types_used = sorted(
-        model_summary["Target Type"].dropna().unique().tolist()
-    )
+    types_used = sorted(model_summary["Target Type"].dropna().unique().tolist())
 
     available_type_columns = []
 
@@ -1305,9 +1199,7 @@ def run_multi_target_portfolio_backtest(
         )
 
         type_value = float(type_value_map.get(portfolio_type, 1.0))
-        predictions_df[type_contribution_column] = (
-            predictions_df[type_score_column] * type_value
-        )
+        predictions_df[type_contribution_column] = predictions_df[type_score_column] * type_value
 
         available_type_columns.append(
             (
@@ -1337,15 +1229,8 @@ def run_multi_target_portfolio_backtest(
     # Portfolio weights
     ####################################
 
-    backtest_dates = (
-        predictions_df["Date"]
-        .drop_duplicates()
-        .sort_values()
-        .reset_index(drop=True)
-    )
-    test_tickers = sorted(
-        predictions_df["Ticker"].dropna().unique().tolist()
-    )
+    backtest_dates = predictions_df["Date"].drop_duplicates().sort_values().reset_index(drop=True)
+    test_tickers = sorted(predictions_df["Ticker"].dropna().unique().tolist())
 
     historical_weights = []
 
@@ -1362,8 +1247,7 @@ def run_multi_target_portfolio_backtest(
         )
 
         historical_weights.extend(
-            portfolio[["Date", "Ticker", "Recommended Weight"]]
-            .to_dict("records")
+            portfolio[["Date", "Ticker", "Recommended Weight"]].to_dict("records")
         )
 
     if not historical_weights:
@@ -1380,12 +1264,7 @@ def run_multi_target_portfolio_backtest(
         .fillna(0.0)
     )
 
-    weights_df = (
-        rebalance_weights
-        .reindex(backtest_dates)
-        .ffill()
-        .fillna(0.0)
-    )
+    weights_df = rebalance_weights.reindex(backtest_dates).ffill().fillna(0.0)
 
     # Today's recommendation is used from the next row/date onward, exactly as
     # in the supplied backtest's held_weights = weights_df.shift(1).
@@ -1396,8 +1275,7 @@ def run_multi_target_portfolio_backtest(
     ####################################
 
     recommended_long = (
-        weights_df
-        .rename_axis("Ticker", axis=1)
+        weights_df.rename_axis("Ticker", axis=1)
         .reset_index()
         .melt(
             id_vars="Date",
@@ -1406,8 +1284,7 @@ def run_multi_target_portfolio_backtest(
         )
     )
     held_long = (
-        held_weights
-        .rename_axis("Ticker", axis=1)
+        held_weights.rename_axis("Ticker", axis=1)
         .reset_index()
         .melt(
             id_vars="Date",
@@ -1431,25 +1308,18 @@ def run_multi_target_portfolio_backtest(
     # Backtest returns
     ####################################
 
-    returns_df = (
-        predictions_df.pivot_table(
-            index="Date",
-            columns="Ticker",
-            values="Return",
-            aggfunc="first",
-        )
-        .reindex(index=backtest_dates, columns=test_tickers)
-    )
+    returns_df = predictions_df.pivot_table(
+        index="Date",
+        columns="Ticker",
+        values="Return",
+        aggfunc="first",
+    ).reindex(index=backtest_dates, columns=test_tickers)
 
     strategy_contributions = held_weights * returns_df.fillna(0.0)
 
-    turnover = (
-        held_weights.diff().abs().sum(axis=1).fillna(0.0)
-    )
+    turnover = held_weights.diff().abs().sum(axis=1).fillna(0.0)
     trading_cost = turnover * float(trading_fee)
-    strategy_return_series = (
-        strategy_contributions.sum(axis=1) - trading_cost
-    )
+    strategy_return_series = strategy_contributions.sum(axis=1) - trading_cost
 
     active = held_weights.sum(axis=1) > 0
     if not active.any():
@@ -1462,10 +1332,8 @@ def run_multi_target_portfolio_backtest(
     backtest = backtest.loc[strategy_start:].copy()
     backtest["Strategy"] = (1.0 + backtest["Strategy_Return"]).cumprod()
 
-    backtest["Strategy_Peak"] = backtest["Strategy"].cummax()
-    backtest["Strategy_Drawdown"] = (
-        backtest["Strategy"] / backtest["Strategy_Peak"] - 1.0
-    )
+    backtest["Strategy_Peak"] = backtest["Strategy"].cummax().clip(lower=1.0)
+    backtest["Strategy_Drawdown"] = backtest["Strategy"] / backtest["Strategy_Peak"] - 1.0
     backtest["Turnover"] = turnover.reindex(backtest.index).fillna(0.0)
     backtest["Trading_Cost"] = trading_cost.reindex(backtest.index).fillna(0.0)
 
@@ -1476,9 +1344,7 @@ def run_multi_target_portfolio_backtest(
     returns = backtest["Strategy_Return"].dropna()
     daily_std = float(returns.std())
     sharpe_ratio = (
-        float(returns.mean() / daily_std * np.sqrt(annualisation))
-        if daily_std > 0
-        else np.nan
+        float(returns.mean() / daily_std * np.sqrt(annualisation)) if daily_std > 0 else np.nan
     )
 
     results = {
@@ -1505,6 +1371,7 @@ def run_multi_target_portfolio_backtest(
         "skipped_models": pd.DataFrame(skipped_models),
     }
 
+
 ######################################################################
 # Refactored public API: fit once -> predict once -> backtest many times
 ######################################################################
@@ -1512,31 +1379,31 @@ def run_multi_target_portfolio_backtest(
 
 def _prepare_selected_models(selected_models_df):
     required = {
-        "Target", "Model", "Parameters", "Target Type",
-        "Horizon", "Horizon Score", "Quality Score",
+        "Target",
+        "Model",
+        "Parameters",
+        "Target Type",
+        "Horizon",
+        "Horizon Score",
+        "Quality Score",
     }
     missing = required.difference(selected_models_df.columns)
     if missing:
-        raise ValueError(
-            "selected_models_df is missing columns: "
-            + ", ".join(sorted(missing))
-        )
+        raise ValueError("selected_models_df is missing columns: " + ", ".join(sorted(missing)))
 
     models = selected_models_df.copy()
-    models["Quality Score"] = pd.to_numeric(
-        models["Quality Score"], errors="coerce"
-    ).clip(0.0, 1.0)
-    models["Horizon"] = pd.to_numeric(
-        models["Horizon"], errors="coerce"
-    )
-    models["Horizon Score"] = pd.to_numeric(
-        models["Horizon Score"], errors="coerce"
-    ).clip(0.0, 1.0)
+    models["Quality Score"] = pd.to_numeric(models["Quality Score"], errors="coerce").clip(0.0, 1.0)
+    models["Horizon"] = pd.to_numeric(models["Horizon"], errors="coerce")
+    models["Horizon Score"] = pd.to_numeric(models["Horizon Score"], errors="coerce").clip(0.0, 1.0)
 
     models = models.dropna(
         subset=[
-            "Target", "Model", "Target Type",
-            "Horizon", "Horizon Score", "Quality Score",
+            "Target",
+            "Model",
+            "Target Type",
+            "Horizon",
+            "Horizon Score",
+            "Quality Score",
         ]
     )
 
@@ -1552,6 +1419,7 @@ def create_target_models(
     selected_models_df,
     model_features=None,
     strict=False,
+    purge=True,
 ):
     """
     Fit every available target model ONCE.
@@ -1587,15 +1455,14 @@ def create_target_models(
             continue
 
         statistical_type = None
-        if (
-            "Statistical Type" in row.index
-            and pd.notna(row["Statistical Type"])
-        ):
+        if "Statistical Type" in row.index and pd.notna(row["Statistical Type"]):
             statistical_type = str(row["Statistical Type"])
 
         try:
             model_info = _fit_target_model(
-                training_df=training_df,
+                training_df=purge_training_data(training_df, target_purge_days(target))
+                if purge
+                else training_df,
                 target=target,
                 portfolio_type=portfolio_type,
                 model_name=model_name,
@@ -1614,17 +1481,19 @@ def create_target_models(
         model_info["quality_score"] = float(row["Quality Score"])
         fitted_models[target] = model_info
 
-        summary_rows.append({
-            "Target": target,
-            "Model": model_name,
-            "Parameters": row["Parameters"],
-            "Target Type": portfolio_type,
-            "Statistical Type": model_info["statistical_type"],
-            "Horizon": float(row["Horizon"]),
-            "Horizon Score": float(row["Horizon Score"]),
-            "Quality Score": float(row["Quality Score"]),
-            "Training Rows": int(model_info["training_rows"]),
-        })
+        summary_rows.append(
+            {
+                "Target": target,
+                "Model": model_name,
+                "Parameters": row["Parameters"],
+                "Target Type": portfolio_type,
+                "Statistical Type": model_info["statistical_type"],
+                "Horizon": float(row["Horizon"]),
+                "Horizon Score": float(row["Horizon Score"]),
+                "Quality Score": float(row["Quality Score"]),
+                "Training Rows": int(model_info["training_rows"]),
+            }
+        )
 
     if not fitted_models:
         raise ValueError("No target model could be fitted.")
@@ -1646,19 +1515,14 @@ def create_prediction_dataframe(backtest_df, fitted_models):
     required = {"Date", "Ticker", "Close"}
     missing = required.difference(backtest_df.columns)
     if missing:
-        raise ValueError(
-            "backtest_df is missing columns: "
-            + ", ".join(sorted(missing))
-        )
+        raise ValueError("backtest_df is missing columns: " + ", ".join(sorted(missing)))
 
     data = backtest_df.copy()
     data["Date"] = pd.to_datetime(data["Date"])
     data = data.sort_values(["Date", "Ticker"]).reset_index(drop=True)
 
     if "Return" not in data.columns:
-        data["Return"] = (
-            data.groupby("Ticker", sort=False)["Close"].pct_change()
-        )
+        data["Return"] = data.groupby("Ticker", sort=False)["Close"].pct_change()
 
     parts = []
 
@@ -1686,6 +1550,7 @@ def create_models_and_predictions(
     selected_models_df,
     model_features=None,
     strict=False,
+    purge=True,
 ):
     """
     Convenience wrapper: split TRAIN/BACKTEST, fit once, predict once.
@@ -1693,10 +1558,7 @@ def create_models_and_predictions(
     required = {"Split", "Date", "Ticker", "Close"}
     missing = required.difference(dataframe.columns)
     if missing:
-        raise ValueError(
-            "dataframe is missing columns: "
-            + ", ".join(sorted(missing))
-        )
+        raise ValueError("dataframe is missing columns: " + ", ".join(sorted(missing)))
 
     data = dataframe.copy()
     data["Date"] = pd.to_datetime(data["Date"])
@@ -1709,11 +1571,13 @@ def create_models_and_predictions(
     if backtest_df.empty:
         raise ValueError("No BACKTEST rows are present.")
 
+    validate_chronology(training_df, backtest_df)
     fitted = create_target_models(
         training_df=training_df,
         selected_models_df=selected_models_df,
         model_features=model_features,
         strict=strict,
+        purge=purge,
     )
 
     predictions = create_prediction_dataframe(
@@ -1729,444 +1593,8 @@ def create_models_and_predictions(
     }
 
 
-def portfolio_returns_from_scores(
-    dataframe,
-    max_weight = 0.30,
-    concentration_penalty = 0.10,
-    trading_fee = 0.00
-):
+from equity_selector.portfolio import portfolio_returns_from_scores
 
-    ########################################
-    # Validate
-    ########################################
-
-    required_columns = {
-        "Date",
-        "Ticker",
-        "Return",
-        "Stock_Score",
-    }
-
-    missing_columns = (
-        required_columns
-        .difference(
-            dataframe.columns
-        )
-    )
-
-    if missing_columns:
-        raise ValueError(
-            "Missing columns: "
-            + ", ".join(
-                sorted(
-                    missing_columns
-                )
-            )
-        )
-
-
-    ########################################
-    # Clean
-    ########################################
-
-    data = dataframe[
-        [
-            "Date",
-            "Ticker",
-            "Return",
-            "Stock_Score",
-        ]
-    ].copy()
-
-    data[
-        "Date"
-    ] = pd.to_datetime(
-        data[
-            "Date"
-        ],
-        errors="coerce",
-    )
-
-    data[
-        "Return"
-    ] = (
-        pd.to_numeric(
-            data[
-                "Return"
-            ],
-            errors="coerce",
-        )
-        .replace(
-            [
-                np.inf,
-                -np.inf,
-            ],
-            np.nan,
-        )
-    )
-
-    data[
-        "Stock_Score"
-    ] = (
-        pd.to_numeric(
-            data[
-                "Stock_Score"
-            ],
-            errors="coerce",
-        )
-        .replace(
-            [
-                np.inf,
-                -np.inf,
-            ],
-            np.nan,
-        )
-        .fillna(
-            0.0
-        )
-        .clip(
-            lower=0.0
-        )
-    )
-
-    data = (
-        data
-        .dropna(
-            subset=[
-                "Date",
-                "Ticker",
-                "Return",
-            ]
-        )
-        .sort_values(
-            [
-                "Date",
-                "Ticker",
-            ]
-        )
-        .reset_index(
-            drop=True
-        )
-    )
-
-
-    ########################################
-    # Weight Calculation
-    ########################################
-
-    def calculate_weights(
-        daily_data,
-    ):
-
-        scores = (
-            daily_data
-            .set_index(
-                "Ticker"
-            )[
-                "Stock_Score"
-            ]
-        )
-
-        active = (
-            scores > 0
-        )
-
-        if not active.any():
-            return pd.Series(
-                dtype=float
-            )
-
-
-        score_weights = (
-            scores
-            / scores.sum()
-        )
-
-        equal_weights = (
-            active.astype(float)
-            / active.sum()
-        )
-
-
-        # Blend mostly score-proportional
-        # weights with 10% equal weighting.
-        desired_weights = (
-            (
-                1.0
-                - concentration_penalty
-            )
-            * score_weights
-            +
-            concentration_penalty
-            * equal_weights
-        )
-
-
-        ####################################
-        # Enforce Maximum Weight
-        ####################################
-
-        final_weights = pd.Series(
-            0.0,
-            index=desired_weights.index,
-        )
-
-        remaining_tickers = list(
-            desired_weights.index[
-                active
-            ]
-        )
-
-        remaining_capital = min(
-            1.0,
-            len(
-                remaining_tickers
-            )
-            * max_weight,
-        )
-
-
-        while (
-            remaining_tickers
-            and remaining_capital > 1e-12
-        ):
-
-            remaining_scores = (
-                desired_weights.loc[
-                    remaining_tickers
-                ]
-            )
-
-            proposed = (
-                remaining_scores
-                / remaining_scores.sum()
-                * remaining_capital
-            )
-
-            over_cap = (
-                proposed > max_weight
-            )
-
-            if not over_cap.any():
-
-                final_weights.loc[
-                    remaining_tickers
-                ] = proposed
-
-                break
-
-
-            capped_tickers = list(
-                proposed.index[
-                    over_cap
-                ]
-            )
-
-            final_weights.loc[
-                capped_tickers
-            ] = max_weight
-
-            remaining_capital -= (
-                max_weight
-                * len(
-                    capped_tickers
-                )
-            )
-
-            remaining_tickers = [
-                ticker
-                for ticker in remaining_tickers
-                if ticker not in capped_tickers
-            ]
-
-
-        return final_weights[
-            final_weights > 0
-        ]
-
-
-    ########################################
-    # Run Through Dates
-    ########################################
-
-    dates = (
-        data[
-            "Date"
-        ]
-        .drop_duplicates()
-        .sort_values()
-        .tolist()
-    )
-
-    current_weights = pd.Series(
-        dtype=float
-    )
-
-    previous_weights = pd.Series(
-        dtype=float
-    )
-
-    return_records = []
-
-
-    for date_number, date in enumerate(
-        dates[:-1]
-    ):
-
-
-        ########################################
-        # Current Date
-        #
-        # Scores from this date determine the
-        # portfolio weights.
-        ########################################
-
-        daily_data = (
-            data[
-                data[
-                    "Date"
-                ].eq(
-                    date
-                )
-            ]
-            .copy()
-        )
-
-
-        ########################################
-        # Following Trading Date
-        #
-        # These are the returns earned by the
-        # portfolio selected on the current date.
-        ########################################
-
-        tomorrow_date = dates[
-            date_number + 1
-        ]
-
-        tomorrow_data = (
-            data[
-                data[
-                    "Date"
-                ].eq(
-                    tomorrow_date
-                )
-            ]
-            .copy()
-        )
-
-
-        current_weights = (
-            calculate_weights(
-                daily_data
-            )
-        )
-
-
-        all_tickers = (
-            previous_weights.index
-            .union(
-                current_weights.index
-            )
-        )
-
-        old_weights = (
-            previous_weights
-            .reindex(
-                all_tickers,
-                fill_value=0.0,
-            )
-        )
-
-        new_weights = (
-            current_weights
-            .reindex(
-                all_tickers,
-                fill_value=0.0,
-            )
-        )
-
-        turnover = (
-            0.5
-            * (
-                new_weights
-                - old_weights
-            )
-            .abs()
-            .sum()
-        )
-
-        previous_weights = (
-            current_weights.copy()
-        )
-
-
-
-        ####################################
-        # Apply Held Weights
-        ####################################
-
-        tomorrow_returns = (
-            daily_data
-            .set_index(
-                "Ticker"
-            )[
-                "Return"
-            ]
-        )
-
-        aligned_returns = (
-            tomorrow_returns
-            .reindex(
-                current_weights.index
-            )
-            .fillna(
-                0.0
-            )
-        )
-
-        gross_return = float(
-            (
-                current_weights
-                * aligned_returns
-            ).sum()
-        )
-
-        net_return = (
-            gross_return
-            - turnover
-            * trading_fee
-        )
-
-        return_record = {
-            "Date": tomorrow_date,
-            "Return": net_return,
-        }
-
-        all_tickers = sorted(
-            data["Ticker"]
-            .dropna()
-            .unique()
-        )
-
-        for ticker in all_tickers:
-
-            weight = 0
-
-            if ticker in current_weights.index:
-                weight = current_weights[ticker]
-
-            return_record[ticker] = weight
-
-
-        return_records.append(
-            return_record
-        )
-
-
-    return pd.DataFrame(
-        return_records
-    )
 
 def run_portfolio_backtest_from_predictions(
     predictions_df,
@@ -2185,45 +1613,39 @@ def run_portfolio_backtest_from_predictions(
     ``Horizon Score`` column in predictions_df and call again.
     """
     required = {
-        "Date", "Ticker", "Return", "Signal", "Direction Signal",
-        "Horizon Score"
+        "Date",
+        "Ticker",
+        "Return",
+        "Signal",
+        "Direction Signal",
+        "Horizon Score",
+        "Portfolio Target Type",
     }
     missing = required.difference(predictions_df.columns)
     if missing:
-        raise ValueError(
-            "predictions_df is missing columns: "
-            + ", ".join(sorted(missing))
-        )
+        raise ValueError("predictions_df is missing columns: " + ", ".join(sorted(missing)))
 
     predictions = predictions_df.copy()
     predictions["Date"] = pd.to_datetime(predictions["Date"])
-    predictions["Signal"] = pd.to_numeric(
-        predictions["Signal"], errors="coerce"
-    )
+    predictions["Signal"] = pd.to_numeric(predictions["Signal"], errors="coerce")
     predictions["Direction Signal"] = pd.to_numeric(
-            predictions["Direction Signal"], errors="coerce"
-        )
+        predictions["Direction Signal"], errors="coerce"
+    )
     predictions["Horizon Score"] = pd.to_numeric(
         predictions["Horizon Score"], errors="coerce"
     ).clip(0.0, 1.0)
 
+    predictions["Contribution"] = predictions["Signal"] * predictions["Horizon Score"]
 
-    predictions["Contribution"] = (
-        predictions["Signal"]
-        * predictions["Horizon Score"]
-    )
-
-    predictions["Direction Contribution"]  = (
-        predictions["Direction Signal"]
-        * predictions["Horizon Score"]
+    predictions["Direction Contribution"] = (
+        predictions["Direction Signal"] * predictions["Horizon Score"]
     )
 
     type_value_map = DEFAULT_TYPE_VALUES.copy()
     if type_values is not None:
-        type_value_map.update({
-            str(key).upper().strip(): float(value)
-            for key, value in type_values.items()
-        })
+        type_value_map.update(
+            {str(key).upper().strip(): float(value) for key, value in type_values.items()}
+        )
 
     valid = predictions["Signal"].notna()
 
@@ -2233,7 +1655,7 @@ def run_portfolio_backtest_from_predictions(
         .agg(
             Contribution_Sum=("Contribution", "sum"),
             Direction_Sum=("Direction Contribution", "sum"),
-            Return=("Return", "first")
+            Return=("Return", "first"),
         )
     )
 
@@ -2244,36 +1666,30 @@ def run_portfolio_backtest_from_predictions(
             "RISK_ADJUSTED_ALPHA": 0.60,
             "CROSS_SECTION_ALPHA": 0.60,
             "CROSS_SECTION_DOWNSIDE": 0.55,
-
             "DIRECTION": 0.55,
             "DIRECTION_MULTICLASS": 0.50,
             "ALPHA_BINARY": 0.50,
             "BARRIER_ALPHA": 0.50,
-
             "VOLATILITY": 0.55,
             "ABSOLUTE_MOVE": 0.50,
             "UPSIDE_VOLATILITY": 0.45,
             "DOWNSIDE_VOLATILITY": 0.55,
             "VOLATILITY_ASYMMETRY": 0.50,
             "VOLATILITY_EVENT": 0.50,
-
             "DOWNSIDE": 0.60,
             "TAIL_RISK": 0.60,
             "TAIL_EVENT": 0.55,
             "UPSIDE_RISK": 0.45,
             "UPSIDE_EVENT": 0.45,
-
             "UPSIDE_EXCURSION": 0.50,
             "DOWNSIDE_EXCURSION": 0.55,
             "TIME_TO_UPSIDE_EXCURSION": 0.45,
             "TIME_TO_DOWNSIDE_EXCURSION": 0.50,
-
             "RECOVERY": 0.50,
             "REVERSAL": 0.50,
             "REGIME": 0.55,
             "CORRELATION": 0.50,
             "COVARIANCE": 0.50,
-
             "LIQUIDITY": 0.50,
             "EXECUTION": 0.50,
             "MARKET_IMPACT": 0.50,
@@ -2282,11 +1698,7 @@ def run_portfolio_backtest_from_predictions(
         dtype=float,
     )
 
-
-    BASE_TYPE_SCORES.index.name = (
-        "Portfolio Target Type"
-    )
-
+    BASE_TYPE_SCORES.index.name = "Portfolio Target Type"
 
     predictions = predictions.merge(
         BASE_TYPE_SCORES,
@@ -2296,23 +1708,22 @@ def run_portfolio_backtest_from_predictions(
         validate="many_to_one",
     )
 
+    if type_values is not None:
+        overrides = {str(key).upper().strip(): float(value) for key, value in type_values.items()}
+        predictions["Base Type Score"] = (
+            predictions["Portfolio Target Type"]
+            .map(overrides)
+            .fillna(predictions["Base Type Score"])
+        )
     predictions["Type Score"] = predictions["Contribution_Sum"] * predictions["Base Type Score"]
 
-    predictions = (
-        predictions.loc[valid]
-        .groupby(["Date", "Ticker"], as_index=False)
-        .agg(
-            Stock_Score=("Type Score", "sum"),
-            Stock_Direction=("Direction_Sum", "mean"),
-            Return=("Return", "first")
-        )
+    predictions = predictions.groupby(["Date", "Ticker"], as_index=False).agg(
+        Stock_Score=("Type Score", "sum"),
+        Stock_Direction=("Direction_Sum", "mean"),
+        Return=("Return", "first"),
     )
 
-    negative_direction = (
-        predictions["Stock_Direction"]
-        <
-        0
-    )
+    negative_direction = predictions["Stock_Direction"] < 0
 
     predictions.loc[
         negative_direction,
@@ -2322,49 +1733,18 @@ def run_portfolio_backtest_from_predictions(
         "Stock_Score",
     ].abs()
 
-    backtest = portfolio_returns_from_scores(predictions)
-
-    # Calculate cumulative strategy returns
-    backtest["Strategy Return"] = (
-        1 + backtest["Return"]
-    ).cumprod()
-
-
-    strategy_return = (
-        backtest["Strategy Return"].iloc[-1] - 1
+    backtest = portfolio_returns_from_scores(
+        predictions,
+        max_weight=max_weight,
+        concentration_penalty=concentration_penalty,
+        trading_fee=trading_fee,
     )
+    from equity_selector.metrics import performance_metrics
 
-    strategy_volatility = (
-        backtest["Strategy Return"].std()
-        * np.sqrt(252)
-    )
-
-
-    # Sharpe Ratio
-    strategy_sharpe = (
-        strategy_return
-        / strategy_volatility
-    )
-
-    backtest["Strategy Peak"] = (
-        backtest["Strategy Return"]
-        .cummax()
-    )
-
-    backtest["Strategy Drawdown"] = (
-        (backtest["Strategy Return"] - backtest["Strategy Peak"])
-        / backtest["Strategy Peak"]
-    )
-
-    strategy_average_drawdown = backtest["Strategy Drawdown"].mean()
-
-    strategy_max_drawdown = (
-        backtest["Strategy Drawdown"].min()
-    )
-
+    metrics = performance_metrics(backtest["Return"], annualisation)
     return {
-            "Strategy Return": strategy_return,
-            "Average Drawdown": strategy_average_drawdown,
-            "Max Drawdown": strategy_max_drawdown,
-            "Sharpe Ratio": strategy_sharpe
+        "Strategy Return": metrics["Return"],
+        "Average Drawdown": metrics["Average Drawdown"],
+        "Max Drawdown": metrics["Max Drawdown"],
+        "Sharpe Ratio": metrics["Sharpe Ratio"],
     }

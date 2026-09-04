@@ -23,13 +23,15 @@ def _sector_close(df, sector_df=None, sector_ticker=None):
         end=last_date,
         auto_adjust=True,
         progress=False,
-        multi_level_index=False
+        multi_level_index=False,
     )
 
     return sector["Close"].reindex(df.index)
 
 
-def sector_relative_returns(df, sector_df=None, sector_ticker=None, periods=(1, 5, 20, 60, 120, 252)):
+def sector_relative_returns(
+    df, sector_df=None, sector_ticker=None, periods=(1, 5, 20, 60, 120, 252)
+):
     if isinstance(periods, int):
         periods = [periods]
 

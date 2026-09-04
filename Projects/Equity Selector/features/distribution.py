@@ -1,4 +1,3 @@
-
 def rolling_distribution(df, windows=(20, 60, 252)):
     if isinstance(windows, int):
         windows = [windows]
@@ -58,7 +57,9 @@ def return_autocorrelation(df, windows=(20, 60, 252), lags=(1, 2, 5)):
 
     for window in windows:
         for lag in lags:
-            df[f"Return Autocorrelation {window} Lag {lag}"] = returns.rolling(window).corr(returns.shift(lag))
+            df[f"Return Autocorrelation {window} Lag {lag}"] = returns.rolling(window).corr(
+                returns.shift(lag)
+            )
 
     return df
 

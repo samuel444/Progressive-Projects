@@ -1,50 +1,29 @@
+from equity_selector.settings import configured
 import logging
 import pandas as pd
 import yfinance as yf
 import numpy as np
 import warnings
 
-warnings.filterwarnings("ignore")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%H:%M:%S"
-)
-
 logger = logging.getLogger(__name__)
 
-def run_screen(
-    name,
-    function,
-    df,
-    selected_features,
-    target,
-    dropped_by_target
-):
 
-    selected_features, to_drop = function(
-        df,
-        selected_features,
-        target
-    )
+def run_screen(name, function, df, selected_features, target, dropped_by_target):
+
+    selected_features, to_drop = configured(function, df, selected_features, target)
 
     dropped_by_target[target][name] = to_drop
 
     logger.info(
-        "%s | %s: dropped %d, %d remain",
-        target,
-        name,
-        len(to_drop),
-        len(selected_features)
+        "%s | %s: dropped %d, %d remain", target, name, len(to_drop), len(selected_features)
     )
 
     return selected_features
 
+
 def target_type(df, target):
 
     values = set(df[target].dropna().unique())
-
 
     ########################################
     # Expected Binary Targets
@@ -56,15 +35,11 @@ def target_type(df, target):
         or target.startswith("Top ")
         or target.startswith("Bottom ")
     ):
-
         # Sanity check
         if len(values) > 2:
-            raise ValueError(
-                f"{target} expected binary but has values: {values}"
-            )
+            raise ValueError(f"{target} expected binary but has values: {values}")
 
         return "binary"
-
 
     ########################################
     # Expected Multiclass Targets
@@ -75,7 +50,6 @@ def target_type(df, target):
         or target.startswith("Barrier ")
         or target.startswith("Volatility Barrier")
     ):
-
         # If target actually only contains two classes,
         # treat it as binary
         if len(values) == 2:
@@ -83,57 +57,15 @@ def target_type(df, target):
 
         return "multiclass"
 
-
     ########################################
     # Everything Else
     ########################################
 
     return "continuous"
 
-def train_validation_test_split(df, test=0.2, validation=0.2):
 
-    df = df.copy()
+from equity_selector.validation import train_validation_test_split
 
-    df["Date"] = pd.to_datetime(df["Date"])
-
-    # Unique chronological trading dates
-    dates = np.sort(df["Date"].unique())
-
-    n_dates = len(dates)
-
-    test_start = int(n_dates * (1 - test))
-    validation_start = int(n_dates * (1 - test - validation))
-
-    validation_date = dates[validation_start]
-    test_date = dates[test_start]
-
-    train = df[
-        df["Date"] < validation_date
-    ].copy()
-
-    validation_df = df[
-        (df["Date"] >= validation_date)
-        & (df["Date"] < test_date)
-    ].copy()
-
-    test_df = df[
-        df["Date"] >= test_date
-    ].copy()
-
-    # Optional: put back into chronological panel order
-    train = train.sort_values(
-        ["Date", "Ticker"]
-    ).reset_index(drop=True)
-
-    validation_df = validation_df.sort_values(
-        ["Date", "Ticker"]
-    ).reset_index(drop=True)
-
-    test_df = test_df.sort_values(
-        ["Date", "Ticker"]
-    ).reset_index(drop=True)
-
-    return train, validation_df, test_df
 
 def target_purge_days(target):
 
@@ -160,6 +92,7 @@ def target_purge_days(target):
         or target.startswith("Maximum Adverse Excursion ")
         or target.startswith("Time To Maximum Favourable Excursion ")
         or target.startswith("Time To Maximum Adverse Excursion ")
+        or target.startswith("Future Drawdown At Horizon ")
         or target.startswith("Future Maximum Drawdown ")
         or target.startswith("Future Minimum Return ")
         or target.startswith("Future Return Volatility Ratio ")
@@ -169,9 +102,7 @@ def target_purge_days(target):
         or target.startswith("Top ")
         or target.startswith("Bottom ")
     ):
-
         return int(target.split()[-1])
-
 
     ########################################
     # Future Return Minus Risk
@@ -180,9 +111,7 @@ def target_purge_days(target):
     ########################################
 
     if target.startswith("Future Return Minus Risk "):
-
         return int(target.split()[-2])
-
 
     ########################################
     # Volatility Barrier
@@ -193,9 +122,7 @@ def target_purge_days(target):
     ########################################
 
     if target.startswith("Volatility Barrier "):
-
         return int(target.split()[3])
-
 
     ########################################
     # No Rolling/Future Horizon

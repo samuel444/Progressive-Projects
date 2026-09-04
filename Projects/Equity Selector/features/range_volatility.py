@@ -12,8 +12,8 @@ def high_low_range(df, windows=(5, 20, 60)):
         df[f"Mean High Low Range {window}"] = daily_range.rolling(window).mean()
         df[f"High Low Range Volatility {window}"] = daily_range.rolling(window).std()
         df[f"High Low Range Z Score {window}"] = (
-            (daily_range - daily_range.rolling(window).mean()) / daily_range.rolling(window).std()
-        )
+            daily_range - daily_range.rolling(window).mean()
+        ) / daily_range.rolling(window).std()
 
     return df
 
@@ -25,7 +25,7 @@ def atr(df, windows=(5, 10, 14, 20, 60)):
     previous_close = df["Close"].shift(1)
     true_range = np.maximum(
         df["High"] - df["Low"],
-        np.maximum((df["High"] - previous_close).abs(), (df["Low"] - previous_close).abs())
+        np.maximum((df["High"] - previous_close).abs(), (df["Low"] - previous_close).abs()),
     )
 
     for window in windows:
@@ -56,10 +56,12 @@ def garman_klass_volatility(df, windows=(20, 60, 120)):
 
     log_hl = np.log(df["High"] / df["Low"])
     log_co = np.log(df["Close"] / df["Open"])
-    variance = 0.5 * log_hl ** 2 - (2 * np.log(2) - 1) * log_co ** 2
+    variance = 0.5 * log_hl**2 - (2 * np.log(2) - 1) * log_co**2
 
     for window in windows:
-        df[f"Garman Klass Volatility {window}"] = np.sqrt(variance.clip(lower=0).rolling(window).mean())
+        df[f"Garman Klass Volatility {window}"] = np.sqrt(
+            variance.clip(lower=0).rolling(window).mean()
+        )
 
     return df
 
@@ -68,13 +70,14 @@ def rogers_satchell_volatility(df, windows=(20, 60, 120)):
     if isinstance(windows, int):
         windows = [windows]
 
-    rs = (
-        np.log(df["High"] / df["Close"]) * np.log(df["High"] / df["Open"]) +
-        np.log(df["Low"] / df["Close"]) * np.log(df["Low"] / df["Open"])
-    )
+    rs = np.log(df["High"] / df["Close"]) * np.log(df["High"] / df["Open"]) + np.log(
+        df["Low"] / df["Close"]
+    ) * np.log(df["Low"] / df["Open"])
 
     for window in windows:
-        df[f"Rogers Satchell Volatility {window}"] = np.sqrt(rs.clip(lower=0).rolling(window).mean())
+        df[f"Rogers Satchell Volatility {window}"] = np.sqrt(
+            rs.clip(lower=0).rolling(window).mean()
+        )
 
     return df
 

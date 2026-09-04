@@ -20,13 +20,15 @@ def _market_close(df, market_df=None, market_ticker="^GSPC"):
         end=last_date,
         auto_adjust=True,
         progress=False,
-        multi_level_index=False
+        multi_level_index=False,
     )
 
     return market["Close"].reindex(df.index)
 
 
-def market_relative_returns(df, market_df=None, market_ticker="^GSPC", periods=(1, 5, 20, 60, 120, 252)):
+def market_relative_returns(
+    df, market_df=None, market_ticker="^GSPC", periods=(1, 5, 20, 60, 120, 252)
+):
     if isinstance(periods, int):
         periods = [periods]
 

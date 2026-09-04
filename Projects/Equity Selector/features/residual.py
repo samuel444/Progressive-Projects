@@ -18,7 +18,7 @@ def _market_return(df, market_df=None, market_ticker="^GSPC"):
             end=last_date,
             auto_adjust=True,
             progress=False,
-            multi_level_index=False
+            multi_level_index=False,
         )
 
     return market_df["Close"].reindex(df.index).pct_change()
@@ -66,7 +66,9 @@ def residual_momentum(df, windows=(20, 60, 120, 252), market_df=None, market_tic
         beta = stock_return.rolling(window).cov(market_return) / market_return.rolling(window).var()
         alpha = stock_return.rolling(window).mean() - beta * market_return.rolling(window).mean()
         residual = stock_return - alpha - beta * market_return
-        df[f"Residual Momentum {window}"] = (1 + residual).rolling(window).apply(lambda values: values.prod(), raw=True) - 1
+        df[f"Residual Momentum {window}"] = (1 + residual).rolling(window).apply(
+            lambda values: values.prod(), raw=True
+        ) - 1
 
     return df
 
@@ -80,7 +82,7 @@ def market_r_squared(df, windows=(20, 60, 120, 252), market_df=None, market_tick
 
     for window in windows:
         correlation = stock_return.rolling(window).corr(market_return)
-        df[f"Market R Squared {window}"] = correlation ** 2
+        df[f"Market R Squared {window}"] = correlation**2
 
     return df
 

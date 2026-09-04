@@ -20,7 +20,7 @@ def first_hit_barrier(df, upper=(0.02, 0.05), lower=(-0.02, -0.05), horizons=(10
                 labels = np.full(len(df), np.nan)
 
                 for i in range(len(df) - horizon):
-                    path = prices[i + 1:i + horizon + 1] / prices[i] - 1
+                    path = prices[i + 1 : i + horizon + 1] / prices[i] - 1
                     upper_hits = np.where(path >= upper_barrier)[0]
                     lower_hits = np.where(path <= lower_barrier)[0]
 
@@ -44,7 +44,13 @@ def first_hit_barrier(df, upper=(0.02, 0.05), lower=(-0.02, -0.05), horizons=(10
     return df
 
 
-def volatility_barrier(df, horizons=(20, 60), volatility_windows=(20, 60), upper_multiples=(1, 2), lower_multiples=(1, 2)):
+def volatility_barrier(
+    df,
+    horizons=(20, 60),
+    volatility_windows=(20, 60),
+    upper_multiples=(1, 2),
+    lower_multiples=(1, 2),
+):
     horizons = _as_list(horizons)
     volatility_windows = _as_list(volatility_windows)
     upper_multiples = _as_list(upper_multiples)
@@ -67,7 +73,7 @@ def volatility_barrier(df, horizons=(20, 60), volatility_windows=(20, 60), upper
                         scale = volatility[i] * np.sqrt(horizon)
                         upper_barrier = upper_multiple * scale
                         lower_barrier = -lower_multiple * scale
-                        path = prices[i + 1:i + horizon + 1] / prices[i] - 1
+                        path = prices[i + 1 : i + horizon + 1] / prices[i] - 1
                         upper_hits = np.where(path >= upper_barrier)[0]
                         lower_hits = np.where(path <= lower_barrier)[0]
 
@@ -84,7 +90,9 @@ def volatility_barrier(df, horizons=(20, 60), volatility_windows=(20, 60), upper
                         else:
                             labels[i] = 0
 
-                    df[f"Volatility Barrier {volatility_window} {horizon} {upper_multiple} {lower_multiple}"] = labels
+                    df[
+                        f"Volatility Barrier {volatility_window} {horizon} {upper_multiple} {lower_multiple}"
+                    ] = labels
 
     return df
 

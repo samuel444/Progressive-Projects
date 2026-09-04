@@ -33,7 +33,9 @@ def drawdown_regime(df, windows=(60, 252), thresholds=(-0.10, -0.20)):
 
         for threshold in thresholds:
             label = int(abs(threshold) * 100)
-            df[f"Drawdown Regime {window} Below {label} Percent"] = (drawdown < threshold).astype(int)
+            df[f"Drawdown Regime {window} Below {label} Percent"] = (drawdown < threshold).astype(
+                int
+            )
 
     return df
 
