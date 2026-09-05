@@ -2,8 +2,6 @@
 
 # Equity Selector
 
-See [HARDENING.md](HARDENING.md) for the packaged entry points, installation, verification commands, corrected backtest conventions, and remaining research assumptions. Historical cached results must be regenerated after the timing and metric corrections.
-
 A multi-stage quantitative equity research pipeline for turning screened market data and target-specific predictive models into fully specified portfolio strategies for detailed historical evaluation.
 
 The project is designed around a strict separation between **data suitability**, **model predictability**, **portfolio usefulness**, and **strategy behaviour**. It uses chronological splits throughout, keeps target-blind screening separate from target-aware selection, validates models with purged walk-forward testing, scores surviving targets by quality and horizon, and then evaluates complete portfolio configurations across different stock universes before running detailed precise backtests.

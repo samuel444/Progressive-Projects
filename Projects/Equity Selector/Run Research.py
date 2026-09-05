@@ -5,7 +5,7 @@ from pathlib import Path
 import runpy
 
 SETTINGS = {
-    "stage": "data",  # keys in STAGES below; run one stage at a time
+    "stage": "training",  # keys in STAGES below; run one stage at a time
     "math_threads": 2,
     "joblib_cpu_limit": 2,
 }
@@ -44,3 +44,5 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parent
     os.chdir(root)
     runpy.run_path(str(root / STAGES[SETTINGS["stage"]]), run_name="__main__")
+
+
