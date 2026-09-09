@@ -1,0 +1,102 @@
+from copy import deepcopy
+from horizon_score.groups import SIMULATION_GROUPS
+from horizon_score.config import data_root as project_data_root
+
+"""Edit SETTINGS here, then run this script. CLI path/log options override these values.
+None retains optional defaults; required cache dates must be set here. Packages never prompt.
+"""
+
+from horizon_score.cli import run_stage
+
+SETTINGS = {
+    "DATA_DIR": str(project_data_root() / "portfolio_selection"),
+    "LOG_LEVEL": "INFO",
+    "REBALANCE_MULTIPLIERS": [0.0, 0.25, 0.5, 0.75, 1.0],
+    "CONCENTRATION_PENALTIES": [0.0, 0.05, 0.1, 0.2, 0.3],
+    "MAX_WEIGHTS": [0.1, 0.15, 0.2, 0.25, 0.3],
+    "PORTFOLIO_GROUP_CONFIGURATIONS": deepcopy(SIMULATION_GROUPS),
+    "PORTFOLIO_TYPE_REJECTION_THRESHOLDS": {
+        "Backtest Quality": 1.25,
+        "ALPHA": 1.75,
+        "RELATIVE_ALPHA": 1.75,
+        "RISK_ADJUSTED_ALPHA": 1.75,
+        "CROSS_SECTION_ALPHA": 1.75,
+        "DIRECTION": 1.75,
+        "DIRECTION_MULTICLASS": 2.0,
+        "ALPHA_BINARY": 2.0,
+        "BARRIER_ALPHA": 2.0,
+        "VOLATILITY": 2.0,
+        "DOWNSIDE_VOLATILITY": 1.75,
+        "VOLATILITY_ASYMMETRY": 2.0,
+        "DOWNSIDE": 1.75,
+        "TAIL_RISK": 1.75,
+        "TAIL_EVENT": 2.0,
+        "DOWNSIDE_EXCURSION": 2.0,
+        "VOLATILITY_EVENT": 2.0,
+        "CROSS_SECTION_DOWNSIDE": 2.0,
+        "ABSOLUTE_MOVE": 2.25,
+        "UPSIDE_VOLATILITY": 2.25,
+        "UPSIDE_EVENT": 2.25,
+        "UPSIDE_EXCURSION": 2.25,
+        "RECOVERY": 2.25,
+        "REVERSAL": 2.25,
+        "TIME_TO_DOWNSIDE_EXCURSION": 2.25,
+        "TIME_TO_UPSIDE_EXCURSION": 2.5,
+        "EXECUTION": 2.5,
+        "LIQUIDITY": 2.25,
+        "MARKET_IMPACT": 2.5,
+        "CORRELATION": 2.5,
+        "COVARIANCE": 2.5,
+        "REGIME": 2.25,
+    },
+    "PRIMARY_REJECTION_TYPES": {
+        "ALPHA",
+        "ALPHA_BINARY",
+        "CROSS_SECTION_ALPHA",
+        "DIRECTION",
+        "DIRECTION_MULTICLASS",
+        "DOWNSIDE",
+        "DOWNSIDE_VOLATILITY",
+        "RELATIVE_ALPHA",
+        "RISK_ADJUSTED_ALPHA",
+        "TAIL_RISK",
+    },
+    "SECONDARY_REJECTION_TYPES": {
+        "BARRIER_ALPHA",
+        "CROSS_SECTION_DOWNSIDE",
+        "DOWNSIDE_EXCURSION",
+        "REGIME",
+        "TAIL_EVENT",
+        "VOLATILITY",
+        "VOLATILITY_ASYMMETRY",
+        "VOLATILITY_EVENT",
+    },
+    "TERTIARY_REJECTION_TYPES": {
+        "ABSOLUTE_MOVE",
+        "CORRELATION",
+        "COVARIANCE",
+        "EXECUTION",
+        "LIQUIDITY",
+        "MARKET_IMPACT",
+        "RECOVERY",
+        "REVERSAL",
+        "TIME_TO_DOWNSIDE_EXCURSION",
+        "TIME_TO_UPSIDE_EXCURSION",
+        "UPSIDE_EVENT",
+        "UPSIDE_EXCURSION",
+        "UPSIDE_VOLATILITY",
+    },
+    "portfolio_group_robustness_threshold": 1.75,
+    "number_of_iterations": 30,
+    "settings_robustness_threshold": 2.75,
+    "unseen_stock_robustness_threshold": 1.5,
+    "return_correlation_threshold": 0.97,
+    "performance_percentage_threshold": 0.1,
+    "stock_overlap_threshold": 0.85,
+}
+
+# Optional named helper replacements with the same signature; normally leave empty.
+CALLBACKS = {}
+
+if __name__ == "__main__":
+    run_stage("simulations", settings=SETTINGS, callbacks=CALLBACKS)
