@@ -25,3 +25,12 @@ from .regimes import *
 from .experimental import *
 from .builder import build_features
 from .registry import FEATURE_GROUPS
+from .macro_quality import *
+from .macro_history import *
+from .macro_rates import *
+from .macro_conditions import *
+from .macro_calendar import *
+from .macro_stock import *
+from .macro_stock import *
+from .macro_vintages import *
+from .macro_vintages import *

@@ -23,7 +23,17 @@ from .interactions import all_interaction_features
 from .composite import all_composite_features
 from .regimes import all_regime_features
 from .experimental import all_experimental_features
+from .macro_quality import all_macro_quality_features
+from .macro_history import all_macro_history_features
+from .macro_rates import all_macro_rates_features
+from .macro_conditions import all_macro_conditions_features
+from .macro_calendar import all_macro_calendar_features
+from .macro_stock import all_macro_interaction_features
+from .macro_stock import all_macro_sensitivity_features
+from .macro_vintages import all_macro_vintage_features
 
+
+    
 
 FEATURE_GROUPS = {
     "returns": all_return_features,
@@ -51,4 +61,13 @@ FEATURE_GROUPS = {
     "composite": all_composite_features,
     "regimes": all_regime_features,
     "experimental": all_experimental_features,
+    "macro_quality": all_macro_quality_features,
+    "macro_history": all_macro_history_features,
+    "macro_rates": all_macro_rates_features,
+    "macro_conditions": all_macro_conditions_features,
+    "macro_calendar": all_macro_calendar_features,
+    "macro_interactions": all_macro_interaction_features,
+    "macro_sensitivity": all_macro_sensitivity_features,
+    "macro_vintages": all_macro_vintage_features,
 }
+

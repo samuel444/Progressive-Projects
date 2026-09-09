@@ -8,6 +8,7 @@ from time import perf_counter
 
 STAGES = {
     "data": "Build and screen market features and targets.",
+    "macro_data": "Build and screen macro market features, and stock-specific targets",
     "intraday": "Convert stored features and targets to session-safe intraday data.",
     "training": "Search and validate target models with purged walk-forward folds.",
     "final_test": "Evaluate selected models on the final model-test partition.",

@@ -5,14 +5,15 @@ from pathlib import Path
 import runpy
 
 SETTINGS = {
-    "stage": "training",  # keys in STAGES below; run one stage at a time
-    "math_threads": 2,
-    "joblib_cpu_limit": 2,
+    "stage": "macro_data",  # keys in STAGES below; run one stage at a time
+    "math_threads": 4,
+    "joblib_cpu_limit": 8,
 }
 
 STAGES = {
     "prepare": "Prepare Research.py",
     "data": "Data_Creation_Screening.py",
+    "macro_data": "Macro_Data_Creation_Screening.py",
     "training": "Model Fitting.py",
     "model_confirmation": "Best_Model_Test.py",
     "horizons": "Horizon Score Backtests.py",

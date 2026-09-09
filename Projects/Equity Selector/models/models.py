@@ -1092,8 +1092,16 @@ def fit_xgboost_multiclass(
 
     model.fit(x_train, y_train_encoded, sample_weight=sample_weight)
 
-    predicted_encoded = model.predict(x_validation).astype(int)
+    predictions = np.asarray(model.predict(x_validation))
 
+    if predictions.ndim == 2:
+        if predictions.shape[1] == 1:
+            predicted_encoded = predictions[:, 0].astype(int)
+        else:
+            predicted_encoded = predictions.argmax(axis=1).astype(int)
+    else:
+        predicted_encoded = predictions.astype(int)
+        
     predicted = label_encoder.inverse_transform(predicted_encoded)
 
     probabilities = model.predict_proba(x_validation)
