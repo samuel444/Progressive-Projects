@@ -92,7 +92,13 @@ STAGE_KEYS = {'data': ['RESEARCH_START',
               'MIN_VALIDATION_FOLDS',
               'RESEARCH_END',
               'MODEL_TRAIN_END',
-              'MODEL_VALIDATION_END']}
+              'MODEL_VALIDATION_END',
+              'GRADIENT_BOOSTING_PARAMS', 
+              'LEGACY_CONTINUOUS_MODELS', 
+              'HIST_GRADIENT_PARAMS', 
+              'LEGACY_MULTICLASS_MODELS', 
+              'Targets', 
+              'LEGACY_BINARY_MODELS']}
 
 STAGE_CALLBACKS = {'data': ['RESEARCH_START',
           'all_barrier_targets',

@@ -170,13 +170,14 @@ def walk_forward(
 
                 all_validation_results.append(model_fold_result)
 
-                logger.debug(
-                    "%s | Fold %d | Model %d/%d | %s | Complete",
+                logger.info(
+                    "%s | Fold %d | Model %d/%d | %s | %s | Complete",
                     target,
                     fold,
                     model_number,
                     len(models_to_do),
                     model["name"],
+                    str(model["params"]),
                 )
 
         logger.info("%s | Fold %d | Complete", target, fold)

@@ -351,6 +351,13 @@ def run():
 
     selected_features = load_feature_mapping(data_root() / "Selected_Features.txt", STOCK_TYPE)
     targets = list(selected_features.keys())
+    chosen_targets = get_setting("Targets", None)
+    if chosen_targets:
+        targets = [
+            target
+            for target in targets
+            if target in chosen_targets
+        ]
     no_features_targets = [target for target in targets if not selected_features[target]]
     targets = [target for target in targets if target not in no_features_targets]
     if not targets:
@@ -1083,6 +1090,9 @@ def run():
 
     def main():
         logger.info("Beginning target processing")
+
+        entire_df = []
+
         for target_number, target in enumerate(targets, start=1):
             new_target = False
             _portfolio_type = TARGET_PORTFOLIO_TYPES[target]
@@ -1144,14 +1154,42 @@ def run():
             columns = ["Date", "Ticker", target]
             columns.extend(features)
             logger.info("Target: %s | Loading %d selected features", target, len(features))
-            with sqlite3.connect(FEATURE_DATABASE_PATH) as conn:
-                columns = ", ".join((f'"{column}"' for column in columns))
-                df = research_rows(
-                    pd.read_sql_query(
-                        f'\n                SELECT {columns}\n                FROM "{STOCK_TYPE}"\n                ',
-                        conn,
+            if entire_df == []:
+                with sqlite3.connect(FEATURE_DATABASE_PATH) as conn:
+                    columns = ", ".join((f'"{column}"' for column in columns))
+                    df = research_rows(
+                        pd.read_sql_query(
+                            f'\n                SELECT {columns}\n                FROM "{STOCK_TYPE}"\n                ',
+                            conn,
+                        )
                     )
+                entire_df = df
+            else:
+                entire_df_cols = entire_df.columns
+                new_columns = [
+                    column
+                    for column in columns
+                    if column not in entire_df_cols
+                ]
+                new_columns.extend(["Date", "Ticker"])
+                with sqlite3.connect(FEATURE_DATABASE_PATH) as conn:
+                    new_columns = ", ".join((f'"{column}"' for column in new_columns))
+                    df = research_rows(
+                        pd.read_sql_query(
+                            f'\n                SELECT {new_columns}\n                FROM "{STOCK_TYPE}"\n                ',
+                            conn,
+                        )
+                    )
+
+                entire_df = entire_df.merge(
+                    df,
+                    on=["Date", "Ticker"],
+                    how="outer",
                 )
+
+                df = entire_df[columns]
+                
+
             logger.info(
                 "Target: %s | Data loaded | Rows: %d | Columns: %d",
                 target,
